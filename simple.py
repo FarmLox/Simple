@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+
 print("⚡ Starting 🚀Simple server ...")
 
 import yt_dlp
