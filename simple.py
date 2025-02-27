@@ -906,7 +906,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             
             emoji = "💿" if final_destination.suffix == '.mp3' else "📺"
             logging.info(f"🚀 Done 💥")
-            print(f"{emoji} {final_destination.name} ({formatted_size}\n─────────────────")
+            print(f"{emoji} {final_destination.name} ({formatted_size})\n─────────────────")
             processed_file = final_destination.name
             
         # Cleanup
