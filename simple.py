@@ -16,10 +16,31 @@ import unicodedata
 import difflib
 import shutil
 import tempfile
+import socket
 from pathlib import Path
 from mutagen.id3 import ID3, USLT
 
-# Configure logging first
+# Port availability detection functions
+def is_port_available(port):
+    """Check if a port is available by trying to bind to it."""
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    try:
+        sock.bind(('localhost', port))
+        available = True
+    except socket.error:
+        available = False
+    finally:
+        sock.close()
+    return available
+
+def find_available_port(start_port=47120, max_attempts=1000):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        if is_port_available(port):
+            return port
+    raise RuntimeError(f"Could not find an available port after {max_attempts} attempts")
+
+# Configure logging
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s")
 
 class CustomLogFilter(logging.Filter):
@@ -63,9 +84,6 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addFilter(CustomLogFilter())
 
-# Log server status first
-print(f"✅ Server running on port 8080")
-
 # Temporary directory management functions
 def get_temp_processing_dir():
     """Create and return a persistent temporary directory for processing downloads."""
@@ -87,45 +105,76 @@ def cleanup_temp_dir(temp_dir):
         logging.error(f"❌ Error cleaning temporary directory: {e}")
 
 # Define the path to the config file
-FOLDER_FILE = "Simple_download_folder.json"
+SETTINGS_FILE = "Simple_settings.json"
 
 # Folder management functions
-def load_folder():
-    if os.path.exists(FOLDER_FILE):
+def load_settings():
+    if os.path.exists(SETTINGS_FILE):
         try:
-            with open(FOLDER_FILE, "r") as file:
+            with open(SETTINGS_FILE, "r") as file:
                 data = json.load(file)
+                
+                # Get folder path with fallback
                 folder_path = data.get("folder", "").strip()
                 folder_path = folder_path.replace("{HOME}", str(Path.home()))
-
+                
                 if not folder_path or not os.path.isabs(folder_path):
                     folder_path = Path.home() / "Downloads" / "Simple downloads"
-
-                return Path(folder_path).resolve()
+                
+                # Get port with fallback to default
+                port = data.get("port", 47120)
+                
+                return Path(folder_path).resolve(), port
 
         except json.JSONDecodeError:
-            print("⚠ Error reading folder file. Using last known folder.")
+            print("❌ Error reading settings file. Using defaults.")
 
-    last_known_folder = Path(__file__).parent.resolve()
-    print(f"⚠ Using last known server folder: {last_known_folder}")
-    return last_known_folder
+    # Default values
+    last_known_folder = Path.home() / "Downloads" / "Simple downloads"
+    default_port = 47120
+    
+    print(f"📂 Using default folder: {last_known_folder}")
+    print(f"📡 Using default port: {default_port}")
+    
+    return last_known_folder, default_port
 
-def save_folder(folder):
+def save_settings(folder, port):
     try:
-        with open(FOLDER_FILE, "w") as file:
-            json.dump({"folder": str(folder)}, file, indent=4)
-        print(f"✅ Saved default folder: {folder}")
+        with open(SETTINGS_FILE, "w") as file:
+            json.dump({"folder": str(folder), "port": port}, file, indent=4)
+        print(f"✅ Saved settings - Default folder: {folder}, Port: {port}")
     except Exception as e:
-        print(f"❌ ERROR: Could not save {FOLDER_FILE}: {e}")
+        print(f"❌ ERROR: Could not save {SETTINGS_FILE}: {e}")
 
-    global DEFAULT_DOWNLOAD_FOLDER
+    global DEFAULT_DOWNLOAD_FOLDER, SERVER_PORT
     DEFAULT_DOWNLOAD_FOLDER = folder
+    SERVER_PORT = port
 
-# Load and initialise folder
-DEFAULT_DOWNLOAD_FOLDER = load_folder()
-print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}\n\n😎 Ready\n")
+# Load and initialize settings
+DEFAULT_DOWNLOAD_FOLDER, SERVER_PORT = load_settings()
 
-# Ensure the folder exists
+# Find an available port, starting with the one from settings
+try:
+    # First try the configured port
+    if is_port_available(SERVER_PORT):
+        print(f"✅ Server running on port {SERVER_PORT}")
+    else:
+        # If that's not available, find another one
+        new_port = find_available_port(start_port=SERVER_PORT)
+        print(f"❌ Configured port {SERVER_PORT} is unavailable.")
+        print(f"✅ Using alternative port: {new_port}")
+        SERVER_PORT = new_port
+        # Save the new port to settings
+        save_settings(DEFAULT_DOWNLOAD_FOLDER, SERVER_PORT)
+except Exception as e:
+    print(f"❌ Error finding available port: {e}")
+    print("📡 Using default port 47120")
+    SERVER_PORT = 47120
+
+# Print folder information after port is determined
+print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}")
+
+# Ensure the folder exists (only needs to be done once)
 DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
 # Filename and subtitle handling functions
@@ -426,7 +475,7 @@ def extract_chapter_titles(url, chapters_xml):
     is_supported, platform = is_supported_video_platform(url)
     
     if not is_supported:
-        logging.debug(f"⚠️ No chapter extraction available for this URL type")
+        logging.debug(f"❌️ No chapter extraction available for this URL type")
         return False
     
     if platform == "youtube":
@@ -434,10 +483,10 @@ def extract_chapter_titles(url, chapters_xml):
     elif platform == "ted":
         return extract_ted_chapters(url, chapters_xml)
     elif platform in ["vimeo", "dailymotion"]:
-        logging.debug(f"⚠️ Chapter extraction for {platform} not yet implemented")
+        logging.debug(f"❌️ Chapter extraction for {platform} not yet implemented")
         return False
     else:
-        logging.debug(f"⚠️ Unrecognised platform for chapter extraction")
+        logging.debug(f"❌️ Unrecognised platform for chapter extraction")
         return False
 
 def extract_youtube_chapters(url, chapters_xml):
@@ -476,11 +525,11 @@ def extract_youtube_chapters(url, chapters_xml):
                         })
                     logging.debug("✅ SponsorBlock segments found")
                 else:
-                    logging.debug("⚠️ No SponsorBlock segments available")
+                    logging.debug("❌️ No SponsorBlock segments available")
             except Exception as e:
-                logging.debug("⚠️ No SponsorBlock segments available")
+                logging.debug("❌️ No SponsorBlock segments available")
         else:
-            logging.debug("⚠️ No SponsorBlock segments available")
+            logging.debug("❌️ No SponsorBlock segments available")
 
         all_chapters = []
         
@@ -580,7 +629,7 @@ def extract_ted_chapters(url, chapters_xml):
                 logging.debug(f"✅ Created chapters.xml with {len(chapters)} TED chapters")
                 return True
             else:
-                logging.debug("⚠️ No chapters found in TED talk description")
+                logging.debug("❌️ No chapters found in TED talk description")
                 return False
                 
         except json.JSONDecodeError:
@@ -849,12 +898,12 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                         if embed_lyrics_in_mp3(str(file_path), str(matching_srt)):
                             logging.info("🎧 Embedded TED transcript in MP3")
                         else:
-                            logging.warning("⚠️ Failed to embed TED transcript")
+                            logging.warning("❌️ Failed to embed TED transcript")
                 else:
                     if embed_lyrics_in_mp3(str(file_path), str(matching_srt)):
                         logging.info("🎧 Embedded synchronised lyrics/transcript in MP3")
                     else:
-                        logging.warning("⚠️ No lyrics/transcript available")
+                        logging.warning("❌️ No lyrics/transcript available")
                 try:
                     os.remove(matching_srt)
                     logging.debug(f"🧹 Deleted temporary subtitle file: {matching_srt.name}")
@@ -876,7 +925,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                     if fix_TED_lyrics_and_embed_in_mkv(str(file_path), str(matching_srt)):
                         logging.info("🗨️ Embedded TED subtitles in MKV")
                     else:
-                        logging.warning("⚠️ Failed to embed TED subtitles")
+                        logging.warning("❌️ Failed to embed TED subtitles")
                     try:
                         os.remove(matching_srt)
                     except Exception as e:
@@ -947,6 +996,17 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/favicon.ico":
             self._set_headers(204)
+            return
+
+        if self.path == "/port":
+            self._set_headers(200, "application/json")
+            port_response = {
+                "port": SERVER_PORT
+            }
+            try:
+                self.wfile.write(json.dumps(port_response).encode())
+            except ConnectionAbortedError:
+                logging.debug("Connection aborted before response was fully sent.")
             return
 
         if self.path == "/folder":
@@ -1193,7 +1253,8 @@ def format_size(size_bytes):
     return f"{size_mb:.2f} MB" if size_mb >= 1 else f"{size_bytes / 1024:.2f} KB"
 
 # Server initialisation
-server_address = ("", 8080)
+server_address = ("", SERVER_PORT)
+print(f"\n😎 Ready\n")
 httpd = HTTPServer(server_address, BatchRequestHandler)
 
 # Start the server
