@@ -20,27 +20,7 @@ import socket
 from pathlib import Path
 from mutagen.id3 import ID3, USLT
 
-# Port availability detection functions
-def is_port_available(port):
-    """Check if a port is available by trying to bind to it."""
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        sock.bind(('localhost', port))
-        available = True
-    except socket.error:
-        available = False
-    finally:
-        sock.close()
-    return available
-
-def find_available_port(start_port=47120, max_attempts=1000):
-    """Find an available port starting from start_port."""
-    for port in range(start_port, start_port + max_attempts):
-        if is_port_available(port):
-            return port
-    raise RuntimeError(f"Could not find an available port after {max_attempts} attempts")
-
-# Configure logging
+# Configure logging first
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s")
 
 class CustomLogFilter(logging.Filter):
@@ -84,6 +64,93 @@ logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addFilter(CustomLogFilter())
 
+# Define the path to the config file
+SETTINGS_FILE = "Simple_settings.json"
+
+# Check if port is available
+def is_port_available(port):
+    """Check if a port is available."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("", port))
+            return True
+    except OSError:
+        return False
+
+# Find an available port
+def find_available_port(start_port=16868, max_attempts=10):
+    """Find an available port starting from start_port."""
+    port = start_port
+    attempts = 0
+    
+    while attempts < max_attempts:
+        if is_port_available(port):
+            return port
+        port += 1
+        attempts += 1
+    
+    # If we've tried too many ports, fall back to a random high port
+    return find_random_high_port()
+
+def find_random_high_port():
+    """Find a random available high port as last resort."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("", 0))
+        return s.getsockname()[1]
+
+# Load settings
+def load_settings():
+    """Load settings from the settings file."""
+    default_settings = {
+        "folder": "",
+        "port": 16868
+    }
+    
+    if os.path.exists(SETTINGS_FILE):
+        try:
+            with open(SETTINGS_FILE, "r") as file:
+                settings = json.load(file)
+                
+                # Ensure we have all required keys with default values if missing
+                for key, value in default_settings.items():
+                    if key not in settings:
+                        settings[key] = value
+                
+                # Process folder path
+                folder_path = settings["folder"].strip()
+                folder_path = folder_path.replace("{HOME}", str(Path.home()))
+
+                if not folder_path or not os.path.isabs(folder_path):
+                    folder_path = Path.home() / "Downloads" / "Simple downloads"
+                
+                settings["folder"] = str(Path(folder_path).resolve())
+                
+                return settings
+        except json.JSONDecodeError:
+            print("⚠ Error reading settings file. Using defaults.")
+    
+    # If file doesn't exist or has issues, create with defaults
+    default_settings["folder"] = str(Path.home() / "Downloads" / "Simple downloads")
+    save_settings(default_settings)
+    return default_settings
+
+def save_settings(settings):
+    """Save settings to the settings file."""
+    try:
+        with open(SETTINGS_FILE, "w") as file:
+            json.dump(settings, file, indent=4)
+        print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}")
+    except Exception as e:
+        print(f"❌ ERROR: Could not save {SETTINGS_FILE}: {e}")
+
+# Load settings
+settings = load_settings()
+DEFAULT_DOWNLOAD_FOLDER = Path(settings["folder"])
+DEFAULT_PORT = settings["port"]
+
+# Ensure the folder exists
+DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+
 # Temporary directory management functions
 def get_temp_processing_dir():
     """Create and return a persistent temporary directory for processing downloads."""
@@ -104,78 +171,20 @@ def cleanup_temp_dir(temp_dir):
     except Exception as e:
         logging.error(f"❌ Error cleaning temporary directory: {e}")
 
-# Define the path to the config file
-SETTINGS_FILE = "Simple_settings.json"
-
 # Folder management functions
-def load_settings():
-    if os.path.exists(SETTINGS_FILE):
-        try:
-            with open(SETTINGS_FILE, "r") as file:
-                data = json.load(file)
-                
-                # Get folder path with fallback
-                folder_path = data.get("folder", "").strip()
-                folder_path = folder_path.replace("{HOME}", str(Path.home()))
-                
-                if not folder_path or not os.path.isabs(folder_path):
-                    folder_path = Path.home() / "Downloads" / "Simple downloads"
-                
-                # Get port with fallback to default
-                port = data.get("port", 47120)
-                
-                return Path(folder_path).resolve(), port
+def load_folder():
+    return DEFAULT_DOWNLOAD_FOLDER
 
-        except json.JSONDecodeError:
-            print("❌ Error reading settings file. Using defaults.")
-
-    # Default values
-    last_known_folder = Path.home() / "Downloads" / "Simple downloads"
-    default_port = 47120
-    
-    print(f"📂 Using default folder: {last_known_folder}")
-    print(f"📡 Using default port: {default_port}")
-    
-    return last_known_folder, default_port
-
-def save_settings(folder, port):
+def save_folder(folder):
     try:
-        with open(SETTINGS_FILE, "w") as file:
-            json.dump({"folder": str(folder), "port": port}, file, indent=4)
-        print(f"✅ Saved settings - Default folder: {folder}, Port: {port}")
+        settings["folder"] = str(folder)
+        save_settings(settings)
+        print(f"✅ Saved default folder: {folder}")
     except Exception as e:
-        print(f"❌ ERROR: Could not save {SETTINGS_FILE}: {e}")
+        print(f"❌ ERROR: Could not save folder setting: {e}")
 
-    global DEFAULT_DOWNLOAD_FOLDER, SERVER_PORT
-    DEFAULT_DOWNLOAD_FOLDER = folder
-    SERVER_PORT = port
-
-# Load and initialize settings
-DEFAULT_DOWNLOAD_FOLDER, SERVER_PORT = load_settings()
-
-# Find an available port, starting with the one from settings
-try:
-    # First try the configured port
-    if is_port_available(SERVER_PORT):
-        print(f"✅ Server running on port {SERVER_PORT}")
-    else:
-        # If that's not available, find another one
-        new_port = find_available_port(start_port=SERVER_PORT)
-        print(f"❌ Configured port {SERVER_PORT} is unavailable.")
-        print(f"✅ Using alternative port: {new_port}")
-        SERVER_PORT = new_port
-        # Save the new port to settings
-        save_settings(DEFAULT_DOWNLOAD_FOLDER, SERVER_PORT)
-except Exception as e:
-    print(f"❌ Error finding available port: {e}")
-    print("📡 Using default port 47120")
-    SERVER_PORT = 47120
-
-# Print folder information after port is determined
-print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}")
-
-# Ensure the folder exists (only needs to be done once)
-DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+    global DEFAULT_DOWNLOAD_FOLDER
+    DEFAULT_DOWNLOAD_FOLDER = Path(folder)
 
 # Filename and subtitle handling functions
 def normalise_filename(name):
@@ -475,7 +484,7 @@ def extract_chapter_titles(url, chapters_xml):
     is_supported, platform = is_supported_video_platform(url)
     
     if not is_supported:
-        logging.debug(f"❌️ No chapter extraction available for this URL type")
+        logging.debug(f"⚠️ No chapter extraction available for this URL type")
         return False
     
     if platform == "youtube":
@@ -483,10 +492,10 @@ def extract_chapter_titles(url, chapters_xml):
     elif platform == "ted":
         return extract_ted_chapters(url, chapters_xml)
     elif platform in ["vimeo", "dailymotion"]:
-        logging.debug(f"❌️ Chapter extraction for {platform} not yet implemented")
+        logging.debug(f"⚠️ Chapter extraction for {platform} not yet implemented")
         return False
     else:
-        logging.debug(f"❌️ Unrecognised platform for chapter extraction")
+        logging.debug(f"⚠️ Unrecognised platform for chapter extraction")
         return False
 
 def extract_youtube_chapters(url, chapters_xml):
@@ -525,11 +534,11 @@ def extract_youtube_chapters(url, chapters_xml):
                         })
                     logging.debug("✅ SponsorBlock segments found")
                 else:
-                    logging.debug("❌️ No SponsorBlock segments available")
+                    logging.debug("⚠️ No SponsorBlock segments available")
             except Exception as e:
-                logging.debug("❌️ No SponsorBlock segments available")
+                logging.debug("⚠️ No SponsorBlock segments available")
         else:
-            logging.debug("❌️ No SponsorBlock segments available")
+            logging.debug("⚠️ No SponsorBlock segments available")
 
         all_chapters = []
         
@@ -629,7 +638,7 @@ def extract_ted_chapters(url, chapters_xml):
                 logging.debug(f"✅ Created chapters.xml with {len(chapters)} TED chapters")
                 return True
             else:
-                logging.debug("❌️ No chapters found in TED talk description")
+                logging.debug("⚠️ No chapters found in TED talk description")
                 return False
                 
         except json.JSONDecodeError:
@@ -713,7 +722,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                 logging.info(f"✅ Skipping download, file already exists: {Path(existing_file).name}")
                 return Path(existing_file).name, Path(existing_file).stat().st_size
         
-        # For Facebook videos with generic names, modify the yt-dlp output template
+# For Facebook videos with generic names, modify the yt-dlp output template
         yt_dlp_output_template = "%(title)s.%(ext)s"
         if is_facebook and (base_name.startswith("Facebook-") or base_name.startswith("Video-")):
             yt_dlp_output_template = f"{base_name}.%(ext)s"
@@ -898,12 +907,12 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                         if embed_lyrics_in_mp3(str(file_path), str(matching_srt)):
                             logging.info("🎧 Embedded TED transcript in MP3")
                         else:
-                            logging.warning("❌️ Failed to embed TED transcript")
+                            logging.warning("⚠️ Failed to embed TED transcript")
                 else:
                     if embed_lyrics_in_mp3(str(file_path), str(matching_srt)):
                         logging.info("🎧 Embedded synchronised lyrics/transcript in MP3")
                     else:
-                        logging.warning("❌️ No lyrics/transcript available")
+                        logging.warning("⚠️ No lyrics/transcript available")
                 try:
                     os.remove(matching_srt)
                     logging.debug(f"🧹 Deleted temporary subtitle file: {matching_srt.name}")
@@ -925,7 +934,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                     if fix_TED_lyrics_and_embed_in_mkv(str(file_path), str(matching_srt)):
                         logging.info("🗨️ Embedded TED subtitles in MKV")
                     else:
-                        logging.warning("❌️ Failed to embed TED subtitles")
+                        logging.warning("⚠️ Failed to embed TED subtitles")
                     try:
                         os.remove(matching_srt)
                     except Exception as e:
@@ -998,17 +1007,6 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             self._set_headers(204)
             return
 
-        if self.path == "/port":
-            self._set_headers(200, "application/json")
-            port_response = {
-                "port": SERVER_PORT
-            }
-            try:
-                self.wfile.write(json.dumps(port_response).encode())
-            except ConnectionAbortedError:
-                logging.debug("Connection aborted before response was fully sent.")
-            return
-
         if self.path == "/folder":
             self._set_headers(200, "application/json")
             folder_response = {
@@ -1026,7 +1024,10 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             if not server_path:
                 server_path = str(Path.home() / "Downloads" / "Simple downloads")
 
-            server_info = {"server_path": server_path}
+            server_info = {
+                "server_path": server_path,
+                "port": settings["port"]
+            }
             try:
                 self.wfile.write(json.dumps(server_info).encode())
             except ConnectionAbortedError:
@@ -1104,7 +1105,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     for idx, video_id in enumerate(video_ids, 1):
                         video_url = f"https://www.youtube.com/watch?v={video_id}"
                         filename_command = [
-"yt-dlp",
+                            "yt-dlp",
                             "--print", "filename",
                             "--cookies-from-browser", "firefox",
                             "-o", "%(title)s.%(ext)s",
@@ -1196,7 +1197,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             self.wfile.write(b"No URL provided in the request")
             logging.error("No URL provided in the request.")
 
-def do_POST(self):
+    def do_POST(self):
         content_length = int(self.headers["Content-Length"])
         post_data = self.rfile.read(content_length)
 
@@ -1225,18 +1226,8 @@ def do_POST(self):
                     return
 
                 # ✅ Save new folder permanently
-                save_folder(new_folder)
-
-                # ✅ Reload from the JSON file after updating
-                global DEFAULT_DOWNLOAD_FOLDER
-                DEFAULT_DOWNLOAD_FOLDER = load_folder()
-
-                # ✅ Ensure folder file is saved at least once
-                if not os.path.exists(FOLDER_FILE):
-                    print(f"📂 Creating {FOLDER_FILE} with default folder: {DEFAULT_DOWNLOAD_FOLDER}")
-                    save_folder(DEFAULT_DOWNLOAD_FOLDER)
-                else:
-                    print(f"📂 {FOLDER_FILE} already exists. Skipping creation.")
+                settings["folder"] = str(new_folder)
+                save_settings(settings)
 
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"message": "✅ Download folder updated."}).encode())
@@ -1253,9 +1244,20 @@ def format_size(size_bytes):
     return f"{size_mb:.2f} MB" if size_mb >= 1 else f"{size_bytes / 1024:.2f} KB"
 
 # Server initialisation
-server_address = ("", SERVER_PORT)
-print(f"\n😎 Ready\n")
+port = find_available_port(DEFAULT_PORT)
+if port != DEFAULT_PORT:
+    print(f"⚠ Default port {DEFAULT_PORT} not available, using port {port}")
+    settings["port"] = port
+    save_settings(settings)
+else:
+    logging.debug(f"✅ Using port {port}")
+
+server_address = ("", port)
 httpd = HTTPServer(server_address, BatchRequestHandler)
+
+# Log server status
+print(f"✅ Server running on port {port}")
+print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}\n\n😎 Ready\n")
 
 # Start the server
 try:
@@ -1263,6 +1265,6 @@ try:
 except KeyboardInterrupt:
     print("\n🚀 Downloads cancelled\n")
     print("✨ You need to restart the server to keep downloading")
-    print('✨ To do that, type "python start.py" (without the quotes) and press Enter')
+    print('✨ To do that, type "python simple.py" (without the quotes) and press Enter')
     print("✨ (If you've done that before in this session, press the up arrow to save you typing)\n\n")
     sys.exit(0)
