@@ -1226,8 +1226,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     return
 
                 # ✅ Save new folder permanently
-                settings["folder"] = str(new_folder)
-                save_settings(settings)
+                save_folder(new_folder)
 
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"message": "✅ Download folder updated."}).encode())
