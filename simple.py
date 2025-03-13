@@ -752,7 +752,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             if not is_ted_video:
                 # Regular video download with embedded subs
                 yt_dlp_command += [
-                    "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                    "-f", "bv*+ba/b",
                     "--merge-output-format", "mkv",
                     "--remux-video", "mkv",
                     "--audio-format", "aac",
@@ -763,7 +763,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             else:
                 # TED video - download subs separately
                 yt_dlp_command += [
-                    "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                    "-f", "bv*+ba/b",
                     "--merge-output-format", "mkv",
                     "--remux-video", "mkv",
                     "--audio-format", "aac",
