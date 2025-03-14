@@ -752,7 +752,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             if not is_ted_video:
                 # Regular video download with embedded subs
                 yt_dlp_command += [
-                    "-f", "bv*+ba/b",
+                    "-f", "(bestvideo[vcodec^=vp9.2])+(bestaudio)/bv*+ba/b",
                     "--merge-output-format", "mkv",
                     "--remux-video", "mkv",
                     "--audio-format", "aac",
