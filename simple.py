@@ -777,7 +777,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                 else:
                     # HDR prioritised format string when no 1080p limit set
                     yt_dlp_command += [
-                        "-f", "(bestvideo[vcodec^=vp9.2])+(bestaudio)/bv*+ba/b",
+                        "-f", "(bestvideo[hdr=1])/(bestvideo[bit_depth=10])+(bestaudio)/bv*+ba/b",
                         "--merge-output-format", "mkv",
                         "--remux-video", "mkv",
                         "--audio-format", "aac",
