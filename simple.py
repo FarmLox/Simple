@@ -151,6 +151,17 @@ DEFAULT_PORT = settings["port"]
 # Ensure the folder exists
 DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
+def clean_video_url(url):
+    """Remove playlist parameters from video URLs to ensure single video download."""
+    if "youtube.com/watch" in url and "&list=" in url:
+        # Extract the video ID
+        video_id_match = re.search(r'v=([^&]+)', url)
+        if video_id_match:
+            video_id = video_id_match.group(1)
+            # Return clean URL with just the video ID
+            return f"https://www.youtube.com/watch?v={video_id}"
+    return url
+
 # Temporary directory management functions
 def get_temp_processing_dir():
     """Create and return a persistent temporary directory for processing downloads."""
@@ -667,13 +678,14 @@ def apply_chapters_to_mkv(mkv_file, chapters_xml):
         logging.error(f"❌ Failed to apply chapters: {e}")
         return False
 
-def process_single_video(handler, url, audio_only, temp_processing_dir, item_num=1, total_items=1):
+def process_single_video(handler, url, audio_only, temp_processing_dir, item_num=1, total_items=1, limit_to_1080p=False):
     """Process a single video download completely - from download to final file move."""
     
     # Facebook detection - check if it's a Facebook URL
     is_facebook = "facebook.com" in url.lower() or "fb.com" in url.lower() or "fb.watch" in url.lower()
     
     # Get expected filename for this video
+    url = clean_video_url(url)
     filename_command = [
         "yt-dlp",
         "--print", "filename",
@@ -751,15 +763,28 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
         if not audio_only:
             if not is_ted_video:
                 # Regular video download with embedded subs
-                yt_dlp_command += [
-                    "-f", "(bestvideo[vcodec^=vp9.2])+(bestaudio)/bv*+ba/b",
-                    "--merge-output-format", "mkv",
-                    "--remux-video", "mkv",
-                    "--audio-format", "aac",
-                    "--embed-subs",
-                    "--sub-format", "srt/best",
-                    "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
-                ]
+                if limit_to_1080p:
+                    # Format string when limited to 1080p
+                    yt_dlp_command += [
+                        "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                        "--merge-output-format", "mkv",
+                        "--remux-video", "mkv",
+                        "--audio-format", "aac",
+                        "--embed-subs",
+                        "--sub-format", "srt/best",
+                        "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
+                    ]
+                else:
+                    # HDR prioritised format string when no 1080p limit set
+                    yt_dlp_command += [
+                        "-f", "(bestvideo[vcodec^=vp9.2])+(bestaudio)/bv*+ba/b",
+                        "--merge-output-format", "mkv",
+                        "--remux-video", "mkv",
+                        "--audio-format", "aac",
+                        "--embed-subs",
+                        "--sub-format", "srt/best",
+                        "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
+                    ]
             else:
                 # TED video - download subs separately
                 yt_dlp_command += [
@@ -780,6 +805,9 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                 "--audio-quality", "0",
                 "--write-sub"
             ]
+        
+        # Clean URL to remove playlist parameters
+        yt_dlp_command[-1] = clean_video_url(yt_dlp_command[-1])
         
         # Start download with progress tracking
         current_video_url = url
@@ -1041,6 +1069,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
         if "url" in params:
             url = params["url"][0]
             audio_only = params.get("audioOnly", [False])[0] == "true"
+            limit_to_1080p = params.get("limitTo1080p", [False])[0] == "true"
 
             if not url:
                 self._set_headers(400)
@@ -1127,7 +1156,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     for idx, video_id in enumerate(video_ids, 1):
                         video_url = f"https://www.youtube.com/watch?v={video_id}"
                         processed_file, file_size = process_single_video(
-                            self, video_url, audio_only, temp_processing_dir, idx, num_files
+                            self, video_url, audio_only, temp_processing_dir, idx, num_files, limit_to_1080p
                         )
                         
                         if processed_file:
@@ -1142,7 +1171,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                         logging.info("✅ Downloads complete")
                 else:
                     processed_file, file_size = process_single_video(
-                        self, url, audio_only, temp_processing_dir
+                        self, url, audio_only, temp_processing_dir, 1, 1, limit_to_1080p
                     )
                     
                     if processed_file:
