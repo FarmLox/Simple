@@ -766,7 +766,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                 if limit_to_1080p:
                     # Format string when limited to 1080p
                     yt_dlp_command += [
-                        "-f", "bv*[height<=1080]+ba/b[height<=1080]/b",
+                        "-f", "(bestvideo[hdr=1][height<=1080])/(bestvideo[bit_depth=10][height<=1080])/(bestvideo[height<=1080])+(bestaudio)/b[height<=1080]"
                         "--merge-output-format", "mkv",
                         "--remux-video", "mkv",
                         "--audio-format", "aac",
@@ -1079,7 +1079,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
 
             logging.info("🚀 Download started 🪐")
             print(f"🌍 URL: {url}")
-            print(f"🎧 Audio only?: {audio_only}\n🔎 Getting filename/playlist info ...")
+            print(f"🎧 Audio only?: {audio_only}\n📽️ Limit to max 1080p?: {limit_to_1080p}\n🔎 Getting filename/playlist info ...")
 
             temp_processing_dir = get_temp_processing_dir()
             cleanup_temp_dir(temp_processing_dir)
