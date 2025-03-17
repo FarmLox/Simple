@@ -766,7 +766,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                 if limit_to_1080p:
                     # Format string when limited to 1080p
                     yt_dlp_command += [
-                        "-f", "(bestvideo[hdr=1][height<=1080])/(bestvideo[bit_depth=10][height<=1080])/(bestvideo[height<=1080])+(bestaudio)/b[height<=1080]"
+                        "-f", "(bestvideo[hdr=1][height<=1080])/(bestvideo[bit_depth=10][height<=1080])/(bestvideo[height<=1080])+(bestaudio)/b[height<=1080]",
                         "--merge-output-format", "mkv",
                         "--remux-video", "mkv",
                         "--audio-format", "aac",
@@ -866,11 +866,13 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                             is_downloading_metadata = True
                         elif audio_only:
                             is_downloading_audio = True
-                        elif any(ext in output.lower() for ext in [".m4a", ".mp3", ".aac", ".opus", ".weba"]):
+                        elif any(ext in output.lower() for ext in [".m4a", ".mp3", ".aac", ".opus", ".weba", ".ogg", ".wav", ".flac", ".ac3", ".mka"]):
                             is_downloading_audio = True
-                        elif ".f" in output and any(format_id in output for format_id in ["140", "249", "250", "251", "139", "171"]):
+                        elif ".f" in output and any(format_id in output for format_id in ["140", "249", "250", "251", "139", "171", "258"]):
                             is_downloading_audio = True
-                        elif "audio only" in output.lower():
+                        elif any(indicator in output.lower() for indicator in ["audio only", "audio_only", "audio stream", "audio track", "audio-only"]):
+                            is_downloading_audio = True
+                        elif any(pattern in output.lower() for pattern in ["audio-high", "-audio-", "dash_audio", "audio_track", "audio-track", "audio_mp4", "audio-mp4", "mp4-audio", "audio_segment", "audio=", "audio_only=true"]):
                             is_downloading_audio = True
                         else:
                             is_downloading_video = True
@@ -883,10 +885,10 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                     
                     if is_downloading_metadata:
                         msg = f"📄 Downloading metadata: {progress}%"
+                    elif is_downloading_video:
+                        msg = f"📽️ Downloading video: {progress}%"
                     elif is_downloading_audio:
                         msg = f"🎧 Downloading audio: {progress}%"
-                    elif is_downloading_video:
-                        msg = f"📺 Downloading video: {progress}%"
                     else:
                         msg = f"📥 Downloading: {progress}%"
                         
