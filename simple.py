@@ -1,31 +1,43 @@
 # -*- coding: utf-8 -*-
 
+# Section 1: Initial setup, imports and logging configuration
+
 print("⚡ Starting 🚀Simple server ...")
 
-import yt_dlp
-import subprocess
-import re
-import sys
-from http.server import BaseHTTPRequestHandler, HTTPServer
-import urllib.parse
-import time
-import logging
-import json
-import os
-import unicodedata
-import difflib
-import shutil
-import tempfile
-import socket
-import datetime
-from pathlib import Path
-from mutagen.id3 import ID3, USLT
+# Essential libraries for core functionality
+import yt_dlp            # YouTube-DL fork for video downloading with extended features
+import subprocess        # For executing external commands (mkvmerge, etc.)
+import re                # Regular expressions for pattern matching
+import sys               # System-specific parameters and functions
+from http.server import BaseHTTPRequestHandler, HTTPServer  # Basic HTTP server implementation
+import urllib.parse      # Tools for URL parsing and manipulation
+import time              # Time-related functions for timing and delays
+import logging           # Logging infrastructure
+import json              # JSON parsing and generation
+import os                # Operating system interfaces
+import unicodedata       # Unicode character database for normalisation
+import difflib           # Sequence comparison tools
+import shutil            # High-level file operations
+import tempfile          # Temporary file creation
+import socket            # Low-level networking interface
+import datetime          # Date and time manipulation
+import traceback         # Stack trace handling for error reporting
+from pathlib import Path  # Object-oriented filesystem paths
+from mutagen.id3 import ID3, USLT  # MP3 tag manipulation for embedding lyrics
 
-# Configure logging first
+# Configure logging with timestamp format
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s")
 
 class CustomLogFilter(logging.Filter):
+    """
+    Custom filter to suppress verbose and repetitive log messages.
+    
+    This filter checks log messages against a list of regular expression patterns
+    and filters out any that match, keeping the console output clean and focused
+    on important status updates.
+    """
     def filter(self, record):
+        # Comprehensive list of patterns to ignore in logs
         ignored_patterns = [
             r"Downloading video thumbnail",
             r"Video Thumbnail",
@@ -57,20 +69,57 @@ class CustomLogFilter(logging.Filter):
             r"\[youtube:tab\] Incomplete data received",
         ]
 
+        # Check if the log message matches any of the patterns to be ignored
         log_message = record.getMessage()
         return not any(re.search(pattern, log_message) for pattern in ignored_patterns)
 
-# Setup logging
+# Setup logging with custom filter
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
 logger.addFilter(CustomLogFilter())
 
+# Error Handling Strategy:
+# 1. Server-level errors (handle_connection_error function) - handles errors in the server's main loop
+# 2. Handler-level errors (BatchRequestHandler.handle_error method) - handles errors during HTTP request processing
+# This dual-layer approach ensures ConnectionAbortedError is gracefully handled regardless of where it occurs
+def handle_connection_error(request, client_address):
+    """
+    Custom error handler for server-level connection errors.
+    
+    This function provides a clean error message when a connection is aborted at the server level,
+    preventing verbose stack traces from appearing in the console output.
+    
+    Args:
+        request: The client request object
+        client_address: A tuple containing the client's address information
+    """
+    error_type, error_value, _ = sys.exc_info()
+    if isinstance(error_value, ConnectionAbortedError):
+        print("\n❌ Connection lost")
+        print("─────────────────")
+        print("😎 Ready")
+    else:
+        # Let the original handler process other types of errors
+        traceback.print_exc()
+
 # Define the path to the config file
 SETTINGS_FILE = "Simple_settings.json"
 
+# Section 2: Port management and settings
+
 # Check if port is available
 def is_port_available(port):
-    """Check if a port is available."""
+    """
+    Check if a specific network port is available for use.
+    
+    Attempts to bind to the specified port to determine if it's free.
+    
+    Args:
+        port (int): The port number to check
+        
+    Returns:
+        bool: True if the port is available, False otherwise
+    """
     try:
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
             s.bind(("", port))
@@ -80,7 +129,19 @@ def is_port_available(port):
 
 # Find an available port
 def find_available_port(start_port=16868, max_attempts=10):
-    """Find an available port starting from start_port."""
+    """
+    Find an available port starting from a specified port number.
+    
+    Tries incrementing port numbers until finding an available one,
+    falling back to a random high port if necessary.
+    
+    Args:
+        start_port (int): The initial port to check (default: 16868)
+        max_attempts (int): Maximum number of consecutive ports to try (default: 10)
+        
+    Returns:
+        int: An available port number
+    """
     port = start_port
     attempts = 0
     
@@ -94,14 +155,31 @@ def find_available_port(start_port=16868, max_attempts=10):
     return find_random_high_port()
 
 def find_random_high_port():
-    """Find a random available high port as last resort."""
+    """
+    Find a random available high-numbered port.
+    
+    Uses the system's port allocation mechanism to find a free port
+    in the ephemeral port range.
+    
+    Returns:
+        int: An available port number in the high range
+    """
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         s.bind(("", 0))
         return s.getsockname()[1]
 
 # Load settings
 def load_settings():
-    """Load settings from the settings file."""
+    """
+    Load application settings from the settings file.
+    
+    Reads download folder path and port settings from a JSON file.
+    Creates default settings if the file doesn't exist or is invalid.
+    Processes relative paths and expands environment variables.
+    
+    Returns:
+        dict: A dictionary containing the application settings
+    """
     default_settings = {
         "folder": "",
         "port": 16868
@@ -136,7 +214,15 @@ def load_settings():
     return default_settings
 
 def save_settings(settings):
-    """Save settings to the settings file."""
+    """
+    Save application settings to the settings file.
+    
+    Writes the current settings to a JSON file for persistence
+    between application runs.
+    
+    Args:
+        settings (dict): Dictionary containing the application settings
+    """
     try:
         with open(SETTINGS_FILE, "w") as file:
             json.dump(settings, file, indent=4)
@@ -152,8 +238,22 @@ DEFAULT_PORT = settings["port"]
 # Ensure the folder exists
 DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
+# Section 3: URL and file processing utilities
+
 def clean_video_url(url):
-    """Remove playlist parameters from video URLs to ensure single video download."""
+    """
+    Remove playlist parameters from YouTube video URLs.
+    
+    For YouTube videos that are part of a playlist, this extracts just
+    the video ID and creates a clean URL without playlist parameters,
+    ensuring only the specific video is downloaded.
+    
+    Args:
+        url (str): The YouTube URL, potentially with playlist parameters
+        
+    Returns:
+        str: A clean URL with only the video ID
+    """
     if "youtube.com/watch" in url and "&list=" in url:
         # Extract the video ID
         video_id_match = re.search(r'v=([^&]+)', url)
@@ -165,7 +265,16 @@ def clean_video_url(url):
 
 # Temporary directory management functions
 def get_temp_processing_dir():
-    """Create and return a persistent temporary directory for processing downloads."""
+    """
+    Create and return a persistent temporary directory for processing downloads.
+    
+    Creates a platform-specific temporary directory for intermediate files
+    during download processing. On Windows, uses LocalAppData, and on other
+    platforms, uses the home directory's cache folder.
+    
+    Returns:
+        Path: Path object pointing to the temporary processing directory
+    """
     if sys.platform == "win32":
         base_dir = Path(os.getenv('LOCALAPPDATA')) / "SimpleDownloader" / "temp"
     else:
@@ -175,7 +284,15 @@ def get_temp_processing_dir():
     return base_dir
 
 def cleanup_temp_dir(temp_dir):
-    """Remove all files in the temporary directory."""
+    """
+    Remove all files in the temporary directory.
+    
+    Cleans up the temporary processing directory by removing all files
+    and recreating the empty directory.
+    
+    Args:
+        temp_dir (Path): The temporary directory to clean
+    """
     try:
         shutil.rmtree(temp_dir)
         temp_dir.mkdir(parents=True, exist_ok=True)
@@ -185,9 +302,24 @@ def cleanup_temp_dir(temp_dir):
 
 # Folder management functions
 def load_folder():
+    """
+    Return the current download folder path.
+    
+    Returns:
+        Path: Path object pointing to the current download folder
+    """
     return DEFAULT_DOWNLOAD_FOLDER
 
 def save_folder(folder):
+    """
+    Save a new download folder path to settings.
+    
+    Updates the application settings with a new download folder path
+    and saves the settings to the configuration file.
+    
+    Args:
+        folder (str): The new download folder path
+    """
     try:
         settings["folder"] = str(folder)
         save_settings(settings)
@@ -200,11 +332,35 @@ def save_folder(folder):
 
 # Filename and subtitle handling functions
 def normalise_filename(name):
-    """Remove problematic characters and normalise special symbols."""
+    """
+    Remove problematic characters and normalise special symbols in filenames.
+    
+    Applies Unicode normalisation to convert special characters to their
+    canonical form and converts to lowercase for case-insensitive comparisons.
+    
+    Args:
+        name (str): The filename to normalise
+        
+    Returns:
+        str: Normalised filename
+    """
     return unicodedata.normalize('NFKC', name).lower()
 
+# Section 4: Subtitle and lyrics processing
+
 def convert_srt_timestamp(srt_time):
-    """Convert SRT timestamp (00:00:00,000) to LRC format [mm:ss.xx]"""
+    """
+    Convert SRT timestamp (00:00:00,000) to LRC format [mm:ss.xx].
+    
+    Transforms subtitle timestamps from SRT format to LRC format for
+    lyrics embedding in MP3 files.
+    
+    Args:
+        srt_time (str): Timestamp in SRT format (HH:MM:SS,mmm)
+        
+    Returns:
+        str: Timestamp in LRC format [mm:ss.xx] or None if parsing fails
+    """
     pattern = r'(\d{2}):(\d{2}):(\d{2}),(\d{3})'
     match = re.match(pattern, srt_time)
     if not match:
@@ -215,7 +371,19 @@ def convert_srt_timestamp(srt_time):
     return f"[{total_minutes:02d}:{s:02d}.{ms//10:02d}]"
 
 def fix_TED_lyrics_before_embedding_in_mp3(srt_file):
-    """Fix formatting of first subtitle block in TED audio transcripts."""
+    """
+    Fix formatting of first subtitle block in TED audio transcripts.
+    
+    TED subtitles often have a malformed first subtitle block that needs
+    special handling. This function also adds a 3585ms offset to all
+    timestamps to adjust for audio delay.
+    
+    Args:
+        srt_file (str): Path to the SRT subtitle file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
         with open(srt_file, 'r', encoding='utf-8') as f:
             content = f.read()
@@ -271,7 +439,19 @@ def fix_TED_lyrics_before_embedding_in_mp3(srt_file):
         return False
 
 def fix_TED_lyrics_and_embed_in_mkv(mkv_file, srt_file):
-    """Fix formatting of first subtitle block and embed in MKV file."""
+    """
+    Fix formatting of first subtitle block and embed in MKV file.
+    
+    Similar to fix_TED_lyrics_before_embedding_in_mp3, but embeds the
+    fixed subtitles into an MKV video file using mkvmerge external tool.
+    
+    Args:
+        mkv_file (str): Path to the MKV video file
+        srt_file (str): Path to the SRT subtitle file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
         # First modify the SRT file
         with open(srt_file, 'r', encoding='utf-8') as f:
@@ -357,7 +537,19 @@ def fix_TED_lyrics_and_embed_in_mkv(mkv_file, srt_file):
         return False
 
 def embed_lyrics_in_mp3(mp3_file, srt_file):
-    """Convert SRT to LRC format and embed in MP3 using ID3v2.3"""
+    """
+    Convert SRT to LRC format and embed in MP3 using ID3v2.3.
+    
+    Reads subtitles from an SRT file, converts them to LRC format,
+    and embeds them as synchronised lyrics in an MP3 file.
+    
+    Args:
+        mp3_file (str): Path to the MP3 file
+        srt_file (str): Path to the SRT subtitle file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
         if not os.path.exists(mp3_file) or not mp3_file.lower().endswith('.mp3'):
             logging.error("❌ Invalid MP3 file for lyrics embedding")
@@ -413,7 +605,24 @@ def embed_lyrics_in_mp3(mp3_file, srt_file):
         logging.error(f"❌ Error embedding lyrics: {e}")
         return False
 
+# Section 5: File matching and platform detection
+
 def find_closest_filename(expected_name, directory, desired_extension=None):
+    """
+    Find a file in the directory that closely matches the expected name.
+    
+    Handles case differences, special characters, and fuzzy matching
+    to find an existing file that matches the expected filename.
+    Optionally filters by file extension.
+    
+    Args:
+        expected_name (str): The expected filename to match
+        directory (str): Directory to search in
+        desired_extension (str, optional): File extension to filter by
+        
+    Returns:
+        str: Path to the matching file, or None if no match found
+    """
     expected_normalised = normalise_filename(expected_name)
     all_files = os.listdir(directory)
     normalised_files = {normalise_filename(f): f for f in all_files}
@@ -449,7 +658,20 @@ def find_closest_filename(expected_name, directory, desired_extension=None):
 
 # Platform detection and chapter handling
 def is_supported_video_platform(url):
-    """Check if the URL is from a supported video platform that might have chapters."""
+    """
+    Check if the URL is from a supported video platform that might have chapters.
+    
+    Detects if the URL belongs to YouTube, TED, Vimeo, or Dailymotion
+    using regular expression pattern matching.
+    
+    Args:
+        url (str): URL to check
+        
+    Returns:
+        tuple: (is_supported, platform_name)
+            - is_supported (bool): True if the platform is supported
+            - platform_name (str): Name of the detected platform
+    """
     youtube_patterns = [
         r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=[\w-]+',
         r'(?:https?://)?(?:www\.)?youtube\.com/v/[\w-]+',
@@ -491,8 +713,22 @@ def is_supported_video_platform(url):
     
     return False, "unknown"
 
+# Section 6: Chapter extraction functions
+
 def extract_chapter_titles(url, chapters_xml):
-    """Extracts chapters based on the video platform."""
+    """
+    Extracts chapters based on the video platform.
+    
+    Delegates to platform-specific extraction functions based on
+    the detected video platform.
+    
+    Args:
+        url (str): URL of the video
+        chapters_xml (str): Path to save the extracted chapters XML
+        
+    Returns:
+        bool: True if chapters were extracted successfully, False otherwise
+    """
     is_supported, platform = is_supported_video_platform(url)
     
     if not is_supported:
@@ -511,7 +747,20 @@ def extract_chapter_titles(url, chapters_xml):
         return False
 
 def extract_youtube_chapters(url, chapters_xml):
-    """Extracts both YouTube chapters and SponsorBlock chapters using yt-dlp."""
+    """
+    Extracts both YouTube chapters and SponsorBlock chapters using yt-dlp.
+    
+    Gets chapter information from both the video's own chapter markers
+    and the SponsorBlock community database, combining them into
+    a single chapters XML file.
+    
+    Args:
+        url (str): YouTube URL
+        chapters_xml (str): Path to save the extracted chapters XML
+        
+    Returns:
+        bool: True if chapters were extracted successfully, False otherwise
+    """
     try:
         result = subprocess.run(
             ["yt-dlp", "--dump-json", "--sponsorblock-mark", url],
@@ -587,7 +836,19 @@ def extract_youtube_chapters(url, chapters_xml):
         return False
 
 def extract_ted_chapters(url, chapters_xml):
-    """Extracts chapters from TED talks using yt-dlp's json output."""
+    """
+    Extracts chapters from TED talks using yt-dlp's json output.
+    
+    Parses the video description to extract timestamp-based chapters
+    that are common in TED talks.
+    
+    Args:
+        url (str): TED talk URL
+        chapters_xml (str): Path to save the extracted chapters XML
+        
+    Returns:
+        bool: True if chapters were extracted successfully, False otherwise
+    """
     try:
         result = subprocess.run(
             ["yt-dlp", "--dump-json", url],
@@ -662,7 +923,19 @@ def extract_ted_chapters(url, chapters_xml):
         return False
 
 def apply_chapters_to_mkv(mkv_file, chapters_xml):
-    """Applies the updated chapters.xml to the MKV file."""
+    """
+    Applies the updated chapters.xml to the MKV file.
+    
+    Uses mkvpropedit external tool to embed chapter information into
+    the MKV file.
+    
+    Args:
+        mkv_file (str): Path to the MKV file
+        chapters_xml (str): Path to the chapters XML file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
     try:
         result = subprocess.run(
             ["mkvpropedit", mkv_file, "--chapters", chapters_xml],
@@ -679,8 +952,31 @@ def apply_chapters_to_mkv(mkv_file, chapters_xml):
         logging.error(f"❌ Failed to apply chapters: {e}")
         return False
 
+# Section 7: Video processing main functions
+
 def process_single_video(handler, url, audio_only, temp_processing_dir, item_num=1, total_items=1, limit_to_1080p=False):
-    """Process a single video download completely - from download to final file move."""
+    """
+    Process a single video download completely - from download to final file move.
+    
+    This is the core function that handles the entire process of downloading
+    a video from a supported platform, processing it according to parameters
+    and saving it to the destination folder. Includes special handling for
+    various platforms and formats.
+    
+    Args:
+        handler: The HTTP request handler instance
+        url (str): URL of the video to download
+        audio_only (bool): Whether to extract audio only (MP3)
+        temp_processing_dir (Path): Temporary directory for processing
+        item_num (int): Current item number in a playlist
+        total_items (int): Total number of items in a playlist
+        limit_to_1080p (bool): Whether to limit video resolution to 1080p
+        
+    Returns:
+        tuple: (processed_file, file_size_bytes)
+            - processed_file (str): Name of the processed file
+            - file_size_bytes (int): Size of the processed file in bytes
+    """
     
     # Facebook detection - check if it's a Facebook URL
     is_facebook = "facebook.com" in url.lower() or "fb.com" in url.lower() or "fb.watch" in url.lower()
@@ -1028,11 +1324,34 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
         logging.error(f"❌ Unexpected error processing {url}: {str(e)}")
         return None, 0
 
+# Section 8: HTTP server implementation
+
 class BatchRequestHandler(BaseHTTPRequestHandler):
+    """
+    Custom HTTP request handler for the download server.
+    
+    Handles HTTP requests for video downloads, folder settings
+    and server information. Implements custom error handling
+    for connection aborted errors.
+    """
     def log_message(self, format, *args):
+        """
+        Override to suppress default server log messages.
+        
+        Args:
+            format: Format string
+            *args: Format arguments
+        """
         pass
 
     def _set_headers(self, status_code=200, content_type="application/json"):
+        """
+        Set common HTTP response headers.
+        
+        Args:
+            status_code (int): HTTP status code (default: 200)
+            content_type (str): Content-Type header value (default: "application/json")
+        """
         self.send_response(status_code)
         self.send_header("Content-Type", content_type)
         self.send_header("Access-Control-Allow-Origin", "*")
@@ -1041,9 +1360,35 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
     def do_OPTIONS(self):
+        """Handle OPTIONS requests for CORS preflight."""
         self._set_headers(200)
 
+    def handle_error(self, request, client_address):
+        """
+        Override to suppress ConnectionAbortedError tracebacks during request processing.
+        
+        This catches connection errors that occur while sending responses to clients,
+        which is different from the server-level handle_connection_error function.
+        
+        Args:
+            request: The client request object
+            client_address: A tuple containing the client's address information
+        """
+        error_type, error_value, _ = sys.exc_info()
+        if isinstance(error_value, ConnectionAbortedError):
+            print("\n❌ Connection lost")
+            print("─────────────────")
+            print("😎 Ready")
+        else:
+            super().handle_error(request, client_address)
+
     def do_GET(self):
+        """
+        Handle GET requests.
+        
+        Processes favicon requests, folder information requests,
+        server information requests and download requests.
+        """
         if self.path == "/favicon.ico":
             self._set_headers(204)
             return
@@ -1240,6 +1585,11 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             logging.error("No URL provided in the request.")
 
     def do_POST(self):
+        """
+        Handle POST requests.
+        
+        Processes folder setting requests.
+        """
         content_length = int(self.headers["Content-Length"])
         post_data = self.rfile.read(content_length)
 
@@ -1280,7 +1630,17 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(json.dumps({"message": "❌ Server error while updating folder."}).encode())
 
 def format_size(size_bytes):
-    """Format bytes as human-readable size."""
+    """
+    Format bytes as human-readable size.
+    
+    Converts raw byte count to a human-readable format in MB or KB.
+    
+    Args:
+        size_bytes (int): Size in bytes
+        
+    Returns:
+        str: Formatted size string with units
+    """
     size_mb = size_bytes / (1024 * 1024)
     return f"{size_mb:.2f} MB" if size_mb >= 1 else f"{size_bytes / 1024:.2f} KB"
 
@@ -1299,6 +1659,9 @@ httpd = HTTPServer(server_address, BatchRequestHandler)
 # Log server status
 print(f"✅ Server running on port {port}")
 print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}\n\n😎 Ready\n")
+
+# Assign custom error handler to the server to catch server-level connection errors
+httpd.handle_error = handle_connection_error
 
 # Start the server
 try:
