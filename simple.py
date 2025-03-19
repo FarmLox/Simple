@@ -17,6 +17,7 @@ import difflib
 import shutil
 import tempfile
 import socket
+import datetime
 from pathlib import Path
 from mutagen.id3 import ID3, USLT
 
@@ -720,7 +721,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             base_name = unique_id
             output_filename = Path(output_filename).with_stem(unique_id)
         else:
-            print(f"🗃️ Downloading (filename may be temporarily sanitised):\n　 {base_name}")
+            print(f"🗃️ Downloading (filename may be temporarily sanitised):\n➡️ {base_name}")
         
         # Prepare final filename
         final_extension = ".mp3" if audio_only else ".mkv"
@@ -897,9 +898,15 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                     sys.stdout.write(msg)
                     sys.stdout.flush()
         
-        # Add a newline after progress displays
+        # Replace final progress line with "Done" message
         if download_count > 0:
-            sys.stdout.write("\n")
+            sys.stdout.write('\r' + ' ' * 70 + '\r')  # Clear line
+            now = datetime.datetime.now()
+            timestamp = now.strftime("%Y-%m-%d %H:%M:%S") + f",{now.microsecond // 1000:03d}"
+            file_info = f" (File {item_num}/{total_items})" if total_items > 1 else ""
+            done_msg = f"💯 Done{file_info} 💥 {timestamp}"
+            sys.stdout.write(done_msg + '\n')
+            sys.stdout.flush()
         
         # Process downloaded file
         processed_file = None
@@ -989,13 +996,17 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
 
         if final_destination.exists():
             file_size_bytes = final_destination.stat().st_size
-            file_size_mb = file_size_bytes / (1024 * 1024)
-            formatted_size = f"{file_size_mb:.2f} MB" if file_size_mb >= 1 else f"{file_size_bytes / 1024:.2f} KB"
-            
-            emoji = "💿" if final_destination.suffix == '.mp3' else "📺"
-            logging.info(f"🚀 Done 💥")
-            print(f"{emoji} {final_destination.name} ({formatted_size})\n─────────────────")
             processed_file = final_destination.name
+            
+            # Only show individual file line for playlists
+            if total_items > 1:
+                file_size_mb = file_size_bytes / (1024 * 1024)
+                formatted_size = f"{file_size_mb:.2f} MB" if file_size_mb >= 1 else f"{file_size_bytes / 1024:.2f} KB"
+                emoji = "💿" if final_destination.suffix == '.mp3' else "📺"
+                print(f"{emoji} {final_destination.name} ({formatted_size})")
+            
+            # Always print the separator
+            print("─────────────────")
             
         # Cleanup
         leftover_files = list(temp_processing_dir.glob("*.*"))
@@ -1170,7 +1181,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                             total_size_bytes += file_size
                             
                     if len(processed_files) > 0:
-                        logging.info("✅ Downloads complete")
+                        logging.info("✅ Downloads complete 💃🕺")
                 else:
                     processed_file, file_size = process_single_video(
                         self, url, audio_only, temp_processing_dir, 1, 1, limit_to_1080p
@@ -1190,7 +1201,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                 formatted_time = time.strftime("%H:%M:%S", time.gmtime(elapsed_time))
                 
                 if len(processed_files) > 0:
-                    print("🚀 Download summary 💥💥")
+                    print("💥 Download summary")
                     
                     for file_info in processed_files:
                         emoji = "💿" if file_info['name'].endswith('.mp3') else "📺"
