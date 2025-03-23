@@ -24,6 +24,8 @@ import datetime          # Date and time manipulation
 import traceback         # Stack trace handling for error reporting
 from pathlib import Path  # Object-oriented filesystem paths
 from mutagen.id3 import ID3, USLT  # MP3 tag manipulation for embedding lyrics
+import random            # For randomized delays
+import platform          # For detecting OS to customize user agent
 
 # Configure logging with timestamp format
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s")
@@ -182,7 +184,8 @@ def load_settings():
     """
     default_settings = {
         "folder": "",
-        "port": 16868
+        "port": 16868,
+        "use_browser_cookies": False  # New setting for cookie usage control
     }
     
     if os.path.exists(SETTINGS_FILE):
@@ -226,7 +229,7 @@ def save_settings(settings):
     try:
         with open(SETTINGS_FILE, "w") as file:
             json.dump(settings, file, indent=4)
-        print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}")
+        print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}, use_browser_cookies={settings.get('use_browser_cookies', False)}")
     except Exception as e:
         print(f"❌ ERROR: Could not save {SETTINGS_FILE}: {e}")
 
@@ -234,9 +237,31 @@ def save_settings(settings):
 settings = load_settings()
 DEFAULT_DOWNLOAD_FOLDER = Path(settings["folder"])
 DEFAULT_PORT = settings["port"]
+USE_BROWSER_COOKIES = settings.get("use_browser_cookies", False)
 
 # Ensure the folder exists
 DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
+
+# Get a realistic user agent based on the operating system
+def get_system_user_agent():
+    """
+    Returns a realistic user agent string based on the user's operating system.
+    
+    This helps make requests appear more like normal browser traffic.
+    
+    Returns:
+        str: A user agent string appropriate for the system
+    """
+    system = platform.system()
+    if system == "Windows":
+        return "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    elif system == "Darwin":  # macOS
+        return "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    else:  # Linux and others
+        return "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+# System user agent to be used in requests
+SYSTEM_USER_AGENT = get_system_user_agent()
 
 # Section 3: URL and file processing utilities
 
@@ -329,6 +354,27 @@ def save_folder(folder):
 
     global DEFAULT_DOWNLOAD_FOLDER
     DEFAULT_DOWNLOAD_FOLDER = Path(folder)
+
+# Toggle browser cookie usage
+def set_use_browser_cookies(use_cookies):
+    """
+    Set whether to use browser cookies for downloads.
+    
+    Updates the settings to toggle whether browser cookies are used
+    for video downloading.
+    
+    Args:
+        use_cookies (bool): Whether to use browser cookies
+    """
+    try:
+        settings["use_browser_cookies"] = bool(use_cookies)
+        save_settings(settings)
+        print(f"✅ Browser cookie usage set to: {use_cookies}")
+        
+        global USE_BROWSER_COOKIES
+        USE_BROWSER_COOKIES = bool(use_cookies)
+    except Exception as e:
+        print(f"❌ ERROR: Could not save cookie setting: {e}")
 
 # Filename and subtitle handling functions
 def normalise_filename(name):
@@ -762,8 +808,16 @@ def extract_youtube_chapters(url, chapters_xml):
         bool: True if chapters were extracted successfully, False otherwise
     """
     try:
+        # Build the command with user agent and optional cookies
+        cmd = ["yt-dlp", "--dump-json", "--sponsorblock-mark", "--user-agent", SYSTEM_USER_AGENT, url]
+        
+        # Only add cookies for YouTube if enabled
+        if USE_BROWSER_COOKIES:
+            cmd.insert(1, "--cookies-from-browser")
+            cmd.insert(2, "firefox")
+        
         result = subprocess.run(
-            ["yt-dlp", "--dump-json", "--sponsorblock-mark", url],
+            cmd,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
         regular_chapters = []
@@ -850,8 +904,16 @@ def extract_ted_chapters(url, chapters_xml):
         bool: True if chapters were extracted successfully, False otherwise
     """
     try:
+        # Build the command with user agent and optional cookies
+        cmd = ["yt-dlp", "--dump-json", "--user-agent", SYSTEM_USER_AGENT, url]
+        
+        # Only add cookies for TED if enabled
+        if USE_BROWSER_COOKIES:
+            cmd.insert(1, "--cookies-from-browser")
+            cmd.insert(2, "firefox")
+            
         result = subprocess.run(
-            ["yt-dlp", "--dump-json", url],
+            cmd,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
         )
         
@@ -954,7 +1016,7 @@ def apply_chapters_to_mkv(mkv_file, chapters_xml):
 
 # Section 7: Video processing main functions
 
-def process_single_video(handler, url, audio_only, temp_processing_dir, item_num=1, total_items=1, limit_to_1080p=False):
+def process_single_video(handler, url, audio_only, temp_processing_dir, item_num=1, total_items=1, limit_to_1080p=False, use_mp4=False):
     """
     Process a single video download completely - from download to final file move.
     
@@ -981,16 +1043,31 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
     # Facebook detection - check if it's a Facebook URL
     is_facebook = "facebook.com" in url.lower() or "fb.com" in url.lower() or "fb.watch" in url.lower()
     
+    # Check if we should use cookies for this URL
+    is_auth_site = "youtube.com" in url.lower() or "youtu.be" in url.lower() or is_facebook
+    
+    # Apply randomized delay to mimic human behavior and reduce detection
+    if item_num > 1:
+        delay = random.uniform(1.0, 3.0)
+        time.sleep(delay)
+    
     # Get expected filename for this video
     url = clean_video_url(url)
+    
+    # Build the filename command with user agent and optional cookies
     filename_command = [
         "yt-dlp",
         "--print", "filename",
-        "--cookies-from-browser", "firefox",
+        "--user-agent", SYSTEM_USER_AGENT,
         "-o", "%(title)s.%(ext)s",  # Specify output template without ID
         "-P", str(DEFAULT_DOWNLOAD_FOLDER),
         url
     ]
+    
+    # Only add cookies if enabled and for sites that require authentication
+    if USE_BROWSER_COOKIES and is_auth_site:
+        filename_command.insert(1, "--cookies-from-browser")
+        filename_command.insert(2, "firefox")
     
     try:
         filename_result = subprocess.run(
@@ -1020,7 +1097,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             print(f"🗃️ Downloading (filename may be temporarily sanitised):\n➡️ {base_name}")
         
         # Prepare final filename
-        final_extension = ".mp3" if audio_only else ".mkv"
+        final_extension = ".mp3" if audio_only else ".mp4" if use_mp4 else ".mkv"
         final_filepath = Path(output_filename).with_suffix(final_extension)
         final_destination = DEFAULT_DOWNLOAD_FOLDER / final_filepath.name
         
@@ -1031,7 +1108,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                 logging.info(f"✅ Skipping download, file already exists: {Path(existing_file).name}")
                 return Path(existing_file).name, Path(existing_file).stat().st_size
         
-# For Facebook videos with generic names, modify the yt-dlp output template
+        # For Facebook videos with generic names, modify the yt-dlp output template
         yt_dlp_output_template = "%(title)s.%(ext)s"
         if is_facebook and (base_name.startswith("Facebook-") or base_name.startswith("Video-")):
             yt_dlp_output_template = f"{base_name}.%(ext)s"
@@ -1039,11 +1116,11 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
         # Check if it's a TED video
         is_ted_video = is_supported_video_platform(url)[1] == "ted"
         
-        # Base command parameters
+        # Build base command parameters with user agent
         yt_dlp_command = [
             "yt-dlp",
+            "--user-agent", SYSTEM_USER_AGENT,
             "--no-mtime",
-            "--cookies-from-browser", "firefox",
             "--no-playlist",
             "-o", yt_dlp_output_template,
             "-P", str(temp_processing_dir),
@@ -1056,6 +1133,11 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             url
         ]
         
+        # Only add cookies if enabled and for sites that require authentication
+        if USE_BROWSER_COOKIES and is_auth_site:
+            yt_dlp_command.insert(1, "--cookies-from-browser")
+            yt_dlp_command.insert(2, "firefox")
+        
         # Add format-specific parameters based on conditions
         if not audio_only:
             if not is_ted_video:
@@ -1064,30 +1146,40 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                     # Format string when limited to 1080p
                     yt_dlp_command += [
                         "-f", "(bestvideo[hdr=1][height<=1080])/(bestvideo[bit_depth=10][height<=1080])/(bestvideo[height<=1080])+(bestaudio)/b[height<=1080]",
-                        "--merge-output-format", "mkv",
-                        "--remux-video", "mkv",
-                        "--audio-format", "aac",
-                        "--embed-subs",
-                        "--sub-format", "srt/best",
-                        "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
+                        "--merge-output-format", "mp4" if use_mp4 else "mkv",
+                        "--remux-video", "mp4" if use_mp4 else "mkv",
+                        "--audio-format", "aac"
                     ]
+                    
+                    # Only add these features for MKV format
+                    if not use_mp4:
+                        yt_dlp_command += [
+                            "--embed-subs",
+                            "--sub-format", "srt/best",
+                            "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
+                        ]
                 else:
                     # HDR prioritised format string when no 1080p limit set
                     yt_dlp_command += [
                         "-f", "(bestvideo[hdr=1])/(bestvideo[bit_depth=10])+(bestaudio)/bv*+ba/b",
-                        "--merge-output-format", "mkv",
-                        "--remux-video", "mkv",
-                        "--audio-format", "aac",
-                        "--embed-subs",
-                        "--sub-format", "srt/best",
-                        "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
+                        "--merge-output-format", "mp4" if use_mp4 else "mkv",
+                        "--remux-video", "mp4" if use_mp4 else "mkv",
+                        "--audio-format", "aac"
                     ]
+                    
+                    # Only add these features for MKV format
+                    if not use_mp4:
+                        yt_dlp_command += [
+                            "--embed-subs",
+                            "--sub-format", "srt/best",
+                            "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
+                        ]
             else:
                 # TED video - download subs separately
                 yt_dlp_command += [
                     "-f", "bv*+ba/b",
-                    "--merge-output-format", "mkv",
-                    "--remux-video", "mkv",
+                    "--merge-output-format", "mp4" if use_mp4 else "mkv",
+                    "--remux-video", "mp4" if use_mp4 else "mkv",
                     "--audio-format", "aac",
                     "--write-sub",
                     "--sub-format", "srt/best",
@@ -1212,7 +1304,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
         retries = 0
         max_retries = 10
         while retries < max_retries:
-            download_files = list(temp_processing_dir.glob(f"*.{'mp3' if audio_only else 'mkv'}"))
+            download_files = list(temp_processing_dir.glob(f"*.{'mp3' if audio_only else 'mp4' if use_mp4 else 'mkv'}"))
             if download_files:
                 break
             time.sleep(0.5)
@@ -1273,18 +1365,19 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                     except Exception as e:
                         logging.error(f"❌ Error deleting subtitle file: {e}")
             else:
-                # Handle chapters for supported platforms
-                is_supported, platform = is_supported_video_platform(current_video_url)
-                if is_supported:
-                    logging.debug(f"📥 Getting chapters from {platform} ...")
-                    chapters_xml = Path(temp_processing_dir) / f"{file_path.stem}_chapters.xml"
-                    
-                    if extract_chapter_titles(current_video_url, str(chapters_xml)):
-                        logging.debug("📌 Applying chapters to MKV ...")
-                        apply_chapters_to_mkv(str(file_path), str(chapters_xml))
-                        if os.path.exists(chapters_xml):
-                            logging.debug(f"🧹 Cleaning up chapters file: {chapters_xml}")
-                            os.remove(chapters_xml)
+                # Handle chapters for supported platforms (skip for MP4)
+                if not use_mp4:
+                    is_supported, platform = is_supported_video_platform(current_video_url)
+                    if is_supported:
+                        logging.debug(f"📥 Getting chapters from {platform} ...")
+                        chapters_xml = Path(temp_processing_dir) / f"{file_path.stem}_chapters.xml"
+                        
+                        if extract_chapter_titles(current_video_url, str(chapters_xml)):
+                            logging.debug("📌 Applying chapters to MKV ...")
+                            apply_chapters_to_mkv(str(file_path), str(chapters_xml))
+                            if os.path.exists(chapters_xml):
+                                logging.debug(f"🧹 Cleaning up chapters file: {chapters_xml}")
+                                os.remove(chapters_xml)
 
         # Move and finalise file
         final_destination = DEFAULT_DOWNLOAD_FOLDER / file_path.name
@@ -1412,7 +1505,8 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
 
             server_info = {
                 "server_path": server_path,
-                "port": settings["port"]
+                "port": settings["port"],
+                "use_browser_cookies": settings.get("use_browser_cookies", False)
             }
             try:
                 self.wfile.write(json.dumps(server_info).encode())
@@ -1428,6 +1522,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             url = params["url"][0]
             audio_only = params.get("audioOnly", [False])[0] == "true"
             limit_to_1080p = params.get("limitTo1080p", [False])[0] == "true"
+            use_mp4 = params.get("useMP4", [False])[0] == "true"
 
             if not url:
                 self._set_headers(400)
@@ -1437,7 +1532,11 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
 
             logging.info("🚀 Download started 🪐")
             print(f"🌍 URL: {url}")
-            print(f"🎧 Audio only?: {audio_only}\n📽️ Limit to max 1080p?: {limit_to_1080p}\n🔎 Getting filename/playlist info ...")
+            print(f"🎧 Audio only?: {audio_only}\n📽️ Limit to max 1080p?: {limit_to_1080p}\n📼 Use MP4 format?: {use_mp4}\n🔎 Getting filename/playlist info ...")
+            
+            # Add user agent information
+            print(f"🌐 Using UA: {SYSTEM_USER_AGENT.split('/')[0]}")
+            print(f"🍪 Using browser cookies: {'✅ Yes' if USE_BROWSER_COOKIES else '❌ No'}")
 
             temp_processing_dir = get_temp_processing_dir()
             cleanup_temp_dir(temp_processing_dir)
@@ -1450,13 +1549,19 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                 total_size_bytes = 0
                 
                 if is_playlist_page:
+                    # Build command with user agent
                     playlist_command = [
                         "yt-dlp",
+                        "--user-agent", SYSTEM_USER_AGENT,
                         "--flat-playlist",
                         "--print", "%(id)s",
-                        "--cookies-from-browser", "firefox",
                         url
                     ]
+                    
+                    # Only add cookies for YouTube if enabled
+                    if USE_BROWSER_COOKIES:
+                        playlist_command.insert(1, "--cookies-from-browser")
+                        playlist_command.insert(2, "firefox")
                     
                     playlist_result = subprocess.run(
                         playlist_command,
@@ -1466,13 +1571,20 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     num_files = len(video_ids)
                     
                     # Get playlist name once (with stderr capture to suppress warnings)
+                    # Build command with user agent
                     playlist_name_cmd = [
                         "yt-dlp",
+                        "--user-agent", SYSTEM_USER_AGENT,
                         "--flat-playlist",
                         "--print", "%(playlist_title)s",
-                        "--cookies-from-browser", "firefox",
                         url
                     ]
+                    
+                    # Only add cookies for YouTube if enabled
+                    if USE_BROWSER_COOKIES:
+                        playlist_name_cmd.insert(1, "--cookies-from-browser")
+                        playlist_name_cmd.insert(2, "firefox")
+                        
                     playlist_name_result = subprocess.run(
                         playlist_name_cmd,
                         text=True,
@@ -1491,13 +1603,20 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     # Get all filenames upfront
                     for idx, video_id in enumerate(video_ids, 1):
                         video_url = f"https://www.youtube.com/watch?v={video_id}"
+                        # Build command with user agent
                         filename_command = [
                             "yt-dlp",
+                            "--user-agent", SYSTEM_USER_AGENT,
                             "--print", "filename",
-                            "--cookies-from-browser", "firefox",
                             "-o", "%(title)s.%(ext)s",
                             video_url
                         ]
+                        
+                        # Only add cookies for YouTube if enabled
+                        if USE_BROWSER_COOKIES:
+                            filename_command.insert(1, "--cookies-from-browser")
+                            filename_command.insert(2, "firefox")
+                            
                         filename_result = subprocess.run(
                             filename_command,
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1510,7 +1629,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     
                     print("─────────────────")
                     
-                    # Continue with processing each video
+                    # Continue with processing each video, but add delay between them
                     for idx, video_id in enumerate(video_ids, 1):
                         video_url = f"https://www.youtube.com/watch?v={video_id}"
                         processed_file, file_size = process_single_video(
@@ -1529,7 +1648,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                         logging.info("✅ Downloads complete 💃🕺")
                 else:
                     processed_file, file_size = process_single_video(
-                        self, url, audio_only, temp_processing_dir, 1, 1, limit_to_1080p
+                        self, url, audio_only, temp_processing_dir, 1, 1, limit_to_1080p, use_mp4
                     )
                     
                     if processed_file:
@@ -1628,6 +1747,22 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                 logging.error(f"Error updating folder: {e}")
                 self._set_headers(500)
                 self.wfile.write(json.dumps({"message": "❌ Server error while updating folder."}).encode())
+        
+        elif self.path == "/set-cookie-usage":
+            try:
+                data = json.loads(post_data)
+                use_cookies = data.get("useBrowserCookies", False)
+                
+                # Update the cookie usage setting
+                set_use_browser_cookies(use_cookies)
+                
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"message": f"✅ Browser cookie usage set to: {'enabled' if use_cookies else 'disabled'}"}).encode())
+                
+            except Exception as e:
+                logging.error(f"Error updating cookie settings: {e}")
+                self._set_headers(500)
+                self.wfile.write(json.dumps({"message": "❌ Server error while updating cookie settings."}).encode())
 
 def format_size(size_bytes):
     """
@@ -1658,7 +1793,10 @@ httpd = HTTPServer(server_address, BatchRequestHandler)
 
 # Log server status
 print(f"✅ Server running on port {port}")
-print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}\n\n😎 Ready\n")
+print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}")
+print(f"🍪 Browser cookie usage: {'✅ Enabled' if USE_BROWSER_COOKIES else '❌ Disabled (recommended)'}")
+print(f"🌐 Using user agent: {SYSTEM_USER_AGENT.split(' ')[0]}")
+print("\n😎 Ready\n")
 
 # Assign custom error handler to the server to catch server-level connection errors
 httpd.handle_error = handle_connection_error
