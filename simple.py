@@ -99,7 +99,7 @@ def handle_connection_error(request, client_address):
     if isinstance(error_value, ConnectionAbortedError):
         print("\n❌ Connection lost")
         print("─────────────────")
-        print("😎 Ready")
+        print("😎 Ready\n")
     else:
         # Let the original handler process other types of errors
         traceback.print_exc()
@@ -1522,7 +1522,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
         if isinstance(error_value, ConnectionAbortedError):
             print("\n❌ Connection lost")
             print("─────────────────")
-            print("😎 Ready")
+            print("😎 Ready\n")
         else:
             super().handle_error(request, client_address)
 
