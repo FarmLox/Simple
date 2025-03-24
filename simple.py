@@ -1532,11 +1532,12 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
 
             logging.info("🚀 Download started 🪐")
             print(f"🌍 URL: {url}")
-            print(f"🎧 Audio only?: {audio_only}\n📽️ Limit to max 1080p?: {limit_to_1080p}\n📼 Use MP4 format?: {use_mp4}\n🔎 Getting filename/playlist info ...")
+            print(f"🎧 Audio only?: {'✅ Yes' if audio_only else '❌ No'}\n📽️ Limit to max 1080p?: {'✅ Yes' if limit_to_1080p else '❌ No'}\n📼 Use MP4 format?: {'✅ Yes' if use_mp4 else '❌ No'}")
             
             # Add user agent information
-            print(f"🌐 Using UA: {SYSTEM_USER_AGENT.split('/')[0]}")
             print(f"🍪 Using browser cookies: {'✅ Yes' if USE_BROWSER_COOKIES else '❌ No'}")
+
+            print(f"🔎 Getting filename/playlist info ...")
 
             temp_processing_dir = get_temp_processing_dir()
             cleanup_temp_dir(temp_processing_dir)
@@ -1794,8 +1795,6 @@ httpd = HTTPServer(server_address, BatchRequestHandler)
 # Log server status
 print(f"✅ Server running on port {port}")
 print(f"📂 Download folder is: {DEFAULT_DOWNLOAD_FOLDER}")
-print(f"🍪 Browser cookie usage: {'✅ Enabled' if USE_BROWSER_COOKIES else '❌ Disabled (recommended)'}")
-print(f"🌐 Using user agent: {SYSTEM_USER_AGENT.split(' ')[0]}")
 print("\n😎 Ready\n")
 
 # Assign custom error handler to the server to catch server-level connection errors
