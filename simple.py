@@ -185,7 +185,9 @@ def load_settings():
     default_settings = {
         "folder": "",
         "port": 16868,
-        "use_browser_cookies": False  # New setting for cookie usage control
+        "use_browser_cookies": False,  # Cookie usage control
+        "limit_to_1080p": True,        # Resolution limit setting
+        "use_mp4": False               # Video format setting
     }
     
     if os.path.exists(SETTINGS_FILE):
@@ -216,7 +218,7 @@ def load_settings():
     save_settings(default_settings)
     return default_settings
 
-def save_settings(settings):
+def save_settings(settings, print_message=True):
     """
     Save application settings to the settings file.
     
@@ -225,11 +227,13 @@ def save_settings(settings):
     
     Args:
         settings (dict): Dictionary containing the application settings
+        print_message (bool): Whether to print a message about the settings being saved
     """
     try:
         with open(SETTINGS_FILE, "w") as file:
             json.dump(settings, file, indent=4)
-        print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}, use_browser_cookies={settings.get('use_browser_cookies', False)}")
+        if print_message:
+            print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}, use_browser_cookies={settings.get('use_browser_cookies', False)}")
     except Exception as e:
         print(f"❌ ERROR: Could not save {SETTINGS_FILE}: {e}")
 
@@ -238,6 +242,8 @@ settings = load_settings()
 DEFAULT_DOWNLOAD_FOLDER = Path(settings["folder"])
 DEFAULT_PORT = settings["port"]
 USE_BROWSER_COOKIES = settings.get("use_browser_cookies", False)
+LIMIT_TO_1080P = settings.get("limit_to_1080p", True)
+USE_MP4 = settings.get("use_mp4", False)
 
 # Ensure the folder exists
 DEFAULT_DOWNLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -347,8 +353,13 @@ def save_folder(folder):
     """
     try:
         settings["folder"] = str(folder)
-        save_settings(settings)
-        print(f"✅ Saved default folder: {folder}")
+        
+        # Save settings without printing the full settings message
+        with open(SETTINGS_FILE, "w") as file:
+            json.dump(settings, file, indent=4)
+            
+        # Print a simple, focused message just about the folder change
+        print(f"📂 Download folder changed to: {folder}")
     except Exception as e:
         print(f"❌ ERROR: Could not save folder setting: {e}")
 
@@ -368,13 +379,53 @@ def set_use_browser_cookies(use_cookies):
     """
     try:
         settings["use_browser_cookies"] = bool(use_cookies)
-        save_settings(settings)
-        print(f"✅ Browser cookie usage set to: {use_cookies}")
+        save_settings(settings, print_message=False)
+        print(f"🍪 Browser cookie usage set to: {'✅ Yes' if use_cookies else '❌ No'}\n")
         
         global USE_BROWSER_COOKIES
         USE_BROWSER_COOKIES = bool(use_cookies)
     except Exception as e:
         print(f"❌ ERROR: Could not save cookie setting: {e}")
+
+# Toggle limit to 1080p
+def set_limit_to_1080p(limit_enabled):
+    """
+    Set whether to limit video resolution to 1080p.
+    
+    Updates the settings to toggle the resolution limit.
+    
+    Args:
+        limit_enabled (bool): Whether to limit resolution to 1080p
+    """
+    try:
+        settings["limit_to_1080p"] = bool(limit_enabled)
+        save_settings(settings, print_message=False)
+        print(f"📽️ Limit to max 1080p set to: {'✅ Yes' if limit_enabled else '❌ No'}\n")
+        
+        global LIMIT_TO_1080P
+        LIMIT_TO_1080P = bool(limit_enabled)
+    except Exception as e:
+        print(f"❌ ERROR: Could not save resolution limit setting: {e}")
+
+# Toggle use MP4 instead of MKV
+def set_use_mp4(use_mp4):
+    """
+    Set whether to use MP4 instead of MKV for video downloads.
+    
+    Updates the settings to toggle the video container format.
+    
+    Args:
+        use_mp4 (bool): Whether to use MP4 instead of MKV
+    """
+    try:
+        settings["use_mp4"] = bool(use_mp4)
+        save_settings(settings, print_message=False)
+        print(f"📼 Use MP4 instead of MKV set to: {'✅ Yes' if use_mp4 else '❌ No'}\n")
+        
+        global USE_MP4
+        USE_MP4 = bool(use_mp4)
+    except Exception as e:
+        print(f"❌ ERROR: Could not save video format setting: {e}")
 
 # Filename and subtitle handling functions
 def normalise_filename(name):
@@ -1506,7 +1557,9 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             server_info = {
                 "server_path": server_path,
                 "port": settings["port"],
-                "use_browser_cookies": settings.get("use_browser_cookies", False)
+                "use_browser_cookies": settings.get("use_browser_cookies", False),
+                "limit_to_1080p": settings.get("limit_to_1080p", True),
+                "use_mp4": settings.get("use_mp4", False)
             }
             try:
                 self.wfile.write(json.dumps(server_info).encode())
@@ -1532,10 +1585,8 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
 
             logging.info("🚀 Download started 🪐")
             print(f"🌍 URL: {url}")
-            print(f"🎧 Audio only?: {'✅ Yes' if audio_only else '❌ No'}\n📽️ Limit to max 1080p?: {'✅ Yes' if limit_to_1080p else '❌ No'}\n📼 Use MP4 format?: {'✅ Yes' if use_mp4 else '❌ No'}")
+            print(f"🎧 Audio only?: {'✅ Yes' if audio_only else '❌ No'}\n📽️ Limit to max 1080p?: {'✅ Yes' if limit_to_1080p else '❌ No'}\n🍪 Using browser cookies: {'✅ Yes' if USE_BROWSER_COOKIES else '❌ No'}\n📼 Use MP4 instead of MKV?: {'✅ Yes' if use_mp4 else '❌ No'}")
             
-            # Add user agent information
-            print(f"🍪 Using browser cookies: {'✅ Yes' if USE_BROWSER_COOKIES else '❌ No'}")
 
             print(f"🔎 Getting filename/playlist info ...")
 
@@ -1712,38 +1763,30 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
         """
         content_length = int(self.headers["Content-Length"])
         post_data = self.rfile.read(content_length)
-
         if self.path == "/set-folder":
             try:
                 data = json.loads(post_data)
                 new_folder = data.get("folder", "").strip()
-
                 # ✅ Validate: Ensure it's an absolute path
                 if not new_folder or not os.path.isabs(new_folder):
                     self._set_headers(400)
                     self.wfile.write(json.dumps({"message": "❌ Invalid folder path. Please enter a full absolute path."}).encode())
                     logging.error(f"Invalid folder path: {new_folder}")
                     return
-
                 new_folder_path = Path(new_folder)
-
                 # ✅ Instead of rejecting, create the folder if it doesn't exist
                 new_folder_path.mkdir(parents=True, exist_ok=True)
-
                 # ✅ Ensure the folder is writeable
                 if not os.access(new_folder_path, os.W_OK):
                     self._set_headers(400)
                     self.wfile.write(json.dumps({"message": "❌ Folder exists but is not writable. Check permissions or disk space."}).encode())
                     logging.error(f"Folder exists but is not writable: {new_folder}")
                     return
-
                 # ✅ Save new folder permanently
                 save_folder(new_folder)
-
                 self._set_headers(200)
                 self.wfile.write(json.dumps({"message": "✅ Download folder updated."}).encode())
                 logging.info(f"Download folder updated to: {DEFAULT_DOWNLOAD_FOLDER}")
-
             except Exception as e:
                 logging.error(f"Error updating folder: {e}")
                 self._set_headers(500)
@@ -1764,6 +1807,38 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                 logging.error(f"Error updating cookie settings: {e}")
                 self._set_headers(500)
                 self.wfile.write(json.dumps({"message": "❌ Server error while updating cookie settings."}).encode())
+        
+        elif self.path == "/set-limit-to-1080p":
+            try:
+                data = json.loads(post_data)
+                limit_enabled = data.get("limitTo1080p", True)
+                
+                # Update the resolution limit setting
+                set_limit_to_1080p(limit_enabled)
+                
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"message": f"✅ Resolution limit set to: {'enabled' if limit_enabled else 'disabled'}"}).encode())
+                
+            except Exception as e:
+                logging.error(f"Error updating resolution limit settings: {e}")
+                self._set_headers(500)
+                self.wfile.write(json.dumps({"message": "❌ Server error while updating resolution limit."}).encode())
+        
+        elif self.path == "/set-use-mp4":
+            try:
+                data = json.loads(post_data)
+                use_mp4 = data.get("useMP4", False)
+                
+                # Update the MP4 format setting
+                set_use_mp4(use_mp4)
+                
+                self._set_headers(200)
+                self.wfile.write(json.dumps({"message": f"✅ MP4 format set to: {'enabled' if use_mp4 else 'disabled'}"}).encode())
+                
+            except Exception as e:
+                logging.error(f"Error updating MP4 format settings: {e}")
+                self._set_headers(500)
+                self.wfile.write(json.dumps({"message": "❌ Server error while updating MP4 format setting."}).encode())
 
 def format_size(size_bytes):
     """
