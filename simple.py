@@ -269,6 +269,17 @@ def get_system_user_agent():
 # System user agent to be used in requests
 SYSTEM_USER_AGENT = get_system_user_agent()
 
+# Platforms known to provide generic or duplicate filenames - add ID to these
+PLATFORMS_REQUIRING_IDS = [
+    "instagram.com", 
+    "facebook.com",
+    "fb.com",
+    "fb.watch",
+    "tiktok.com", 
+    "twitter.com",
+    "x.com"
+]
+
 # Section 3: URL and file processing utilities
 
 def clean_video_url(url):
@@ -1060,8 +1071,8 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             - file_size_bytes (int): Size of the processed file in bytes
     """
     
-    # Facebook detection - check if it's a Facebook URL
-    is_facebook = "facebook.com" in url.lower() or "fb.com" in url.lower() or "fb.watch" in url.lower()
+    # Check if the URL is from a platform that needs ID in filename
+    needs_id_in_filename = any(platform in url.lower() for platform in PLATFORMS_REQUIRING_IDS)
     
     # Apply randomized delay to mimic human behavior and reduce detection
     if item_num > 1:
@@ -1078,7 +1089,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
         "--print", "filename",
         "--user-agent", SYSTEM_USER_AGENT,
         "--downloader-args", "default:{'external_client':'firefox135'}",
-        "-o", "%(title)s.%(ext)s",  # Specify output template without ID
+        "-o", "%(title)s [%(id)s].%(ext)s" if needs_id_in_filename else "%(title)s.%(ext)s",
         "-P", str(DEFAULT_DOWNLOAD_FOLDER),
         url
     ]
@@ -1103,33 +1114,21 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
         output_filename = filename_result.stdout.strip()
         base_name = os.path.splitext(os.path.basename(output_filename))[0]
         
-        # Handle generic Facebook filenames with timestamp-based unique name
-        if is_facebook and (base_name == "Facebook" or base_name == "Video"):
-            # Create a timestamp-based unique ID for generic Facebook videos
-            timestamp = time.strftime("%Y%m%d-%H%M%S")
-            unique_id = f"{base_name}-{timestamp}"
-            print(f"🗃️ Downloading (Facebook video title not retrieved so adding timestamp to keep the name unique):\n　 {unique_id}")
-            base_name = unique_id
-            output_filename = Path(output_filename).with_stem(unique_id)
-        else:
-            print(f"🗃️ Downloading (filename may be temporarily sanitised):\n➡️ {base_name}")
+        print(f"🗃️ Downloading (filename may be temporarily sanitised):\n➡️ {base_name}")
         
         # Prepare final filename
         final_extension = ".mp3" if audio_only else ".mp4" if use_mp4 else ".mkv"
         final_filepath = Path(output_filename).with_suffix(final_extension)
         final_destination = DEFAULT_DOWNLOAD_FOLDER / final_filepath.name
         
-        # Check for existing file - but skip this for renamed Facebook videos (they should be unique now)
-        if not (is_facebook and (base_name.startswith("Facebook-") or base_name.startswith("Video-"))):
-            existing_file = find_closest_filename(final_filepath.name, DEFAULT_DOWNLOAD_FOLDER, final_extension)
-            if existing_file:
-                logging.info(f"✅ Skipping download, file already exists: {Path(existing_file).name}")
-                return Path(existing_file).name, Path(existing_file).stat().st_size
+        # Check for existing file
+        existing_file = find_closest_filename(final_filepath.name, DEFAULT_DOWNLOAD_FOLDER, final_extension)
+        if existing_file:
+            logging.info(f"✅ Skipping download, file already exists: {Path(existing_file).name}")
+            return Path(existing_file).name, Path(existing_file).stat().st_size
         
-        # For Facebook videos with generic names, modify the yt-dlp output template
-        yt_dlp_output_template = "%(title)s.%(ext)s"
-        if is_facebook and (base_name.startswith("Facebook-") or base_name.startswith("Video-")):
-            yt_dlp_output_template = f"{base_name}.%(ext)s"
+        # Set the yt-dlp output template
+        yt_dlp_output_template = "%(title)s [%(id)s].%(ext)s" if needs_id_in_filename else "%(title)s.%(ext)s"
         
         # Check if it's a TED video
         is_ted_video = is_supported_video_platform(url)[1] == "ted"
