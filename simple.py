@@ -6,6 +6,7 @@ print("⚡ Starting 🚀Simple server ...")
 
 # Essential libraries for core functionality
 import yt_dlp            # YouTube-DL fork for video downloading with extended features
+import curl_cffi          # Browser fingerprint impersonation for avoiding CAPTCHAs and bot detection
 import subprocess        # For executing external commands (mkvmerge, etc.)
 import re                # Regular expressions for pattern matching
 import sys               # System-specific parameters and functions
@@ -24,8 +25,8 @@ import datetime          # Date and time manipulation
 import traceback         # Stack trace handling for error reporting
 from pathlib import Path  # Object-oriented filesystem paths
 from mutagen.id3 import ID3, USLT  # MP3 tag manipulation for embedding lyrics
-import random            # For randomized delays
-import platform          # For detecting OS to customize user agent
+import random            # For randomised delays
+import platform          # For detecting OS to customise user agent
 
 # Configure logging with timestamp format
 logging.basicConfig(level=logging.INFO, format="%(message)s %(asctime)s")
@@ -99,7 +100,7 @@ def handle_connection_error(request, client_address):
     if isinstance(error_value, ConnectionAbortedError):
         print("\n❌ Connection lost")
         print("─────────────────")
-        print("😎 Ready\n")
+        print("😎 Ready")
     else:
         # Let the original handler process other types of errors
         traceback.print_exc()
@@ -185,7 +186,6 @@ def load_settings():
     default_settings = {
         "folder": "",
         "port": 16868,
-        "use_browser_cookies": False,  # Cookie usage control
         "limit_to_1080p": True,        # Resolution limit setting
         "use_mp4": False               # Video format setting
     }
@@ -233,7 +233,7 @@ def save_settings(settings, print_message=True):
         with open(SETTINGS_FILE, "w") as file:
             json.dump(settings, file, indent=4)
         if print_message:
-            print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}, use_browser_cookies={settings.get('use_browser_cookies', False)}")
+            print(f"✅ Saved settings: folder={settings['folder']}, port={settings['port']}")
     except Exception as e:
         print(f"❌ ERROR: Could not save {SETTINGS_FILE}: {e}")
 
@@ -241,7 +241,7 @@ def save_settings(settings, print_message=True):
 settings = load_settings()
 DEFAULT_DOWNLOAD_FOLDER = Path(settings["folder"])
 DEFAULT_PORT = settings["port"]
-USE_BROWSER_COOKIES = settings.get("use_browser_cookies", False)
+USE_BROWSER_COOKIES = True
 LIMIT_TO_1080P = settings.get("limit_to_1080p", True)
 USE_MP4 = settings.get("use_mp4", False)
 
@@ -365,27 +365,6 @@ def save_folder(folder):
 
     global DEFAULT_DOWNLOAD_FOLDER
     DEFAULT_DOWNLOAD_FOLDER = Path(folder)
-
-# Toggle browser cookie usage
-def set_use_browser_cookies(use_cookies):
-    """
-    Set whether to use browser cookies for downloads.
-    
-    Updates the settings to toggle whether browser cookies are used
-    for video downloading.
-    
-    Args:
-        use_cookies (bool): Whether to use browser cookies
-    """
-    try:
-        settings["use_browser_cookies"] = bool(use_cookies)
-        save_settings(settings, print_message=False)
-        print(f"🍪 Browser cookie usage set to: {'✅ Yes' if use_cookies else '❌ No'}\n")
-        
-        global USE_BROWSER_COOKIES
-        USE_BROWSER_COOKIES = bool(use_cookies)
-    except Exception as e:
-        print(f"❌ ERROR: Could not save cookie setting: {e}")
 
 # Toggle limit to 1080p
 def set_limit_to_1080p(limit_enabled):
@@ -859,13 +838,8 @@ def extract_youtube_chapters(url, chapters_xml):
         bool: True if chapters were extracted successfully, False otherwise
     """
     try:
-        # Build the command with user agent and optional cookies
-        cmd = ["yt-dlp", "--dump-json", "--sponsorblock-mark", "--user-agent", SYSTEM_USER_AGENT, url]
-        
-        # Only add cookies for YouTube if enabled
-        if USE_BROWSER_COOKIES:
-            cmd.insert(1, "--cookies-from-browser")
-            cmd.insert(2, "firefox")
+        # Build the command with user agent and cookies
+        cmd = ["yt-dlp", "--cookies-from-browser", "firefox", "--dump-json", "--sponsorblock-mark", "--user-agent", SYSTEM_USER_AGENT, url]
         
         result = subprocess.run(
             cmd,
@@ -956,13 +930,8 @@ def extract_ted_chapters(url, chapters_xml):
     """
     try:
         # Build the command with user agent and optional cookies
-        cmd = ["yt-dlp", "--dump-json", "--user-agent", SYSTEM_USER_AGENT, url]
+        cmd = ["yt-dlp", "--cookies-from-browser", "firefox", "--dump-json", "--user-agent", SYSTEM_USER_AGENT, url]
         
-        # Only add cookies for TED if enabled
-        if USE_BROWSER_COOKIES:
-            cmd.insert(1, "--cookies-from-browser")
-            cmd.insert(2, "firefox")
-            
         result = subprocess.run(
             cmd,
             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE
@@ -1094,9 +1063,6 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
     # Facebook detection - check if it's a Facebook URL
     is_facebook = "facebook.com" in url.lower() or "fb.com" in url.lower() or "fb.watch" in url.lower()
     
-    # Check if we should use cookies for this URL
-    is_auth_site = "youtube.com" in url.lower() or "youtu.be" in url.lower() or is_facebook
-    
     # Apply randomized delay to mimic human behavior and reduce detection
     if item_num > 1:
         delay = random.uniform(1.0, 3.0)
@@ -1105,20 +1071,21 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
     # Get expected filename for this video
     url = clean_video_url(url)
     
-    # Build the filename command with user agent and optional cookies
+    # Build the filename command with user agent
     filename_command = [
         "yt-dlp",
+        "--cookies-from-browser", "firefox",
         "--print", "filename",
         "--user-agent", SYSTEM_USER_AGENT,
+        "--downloader-args", "default:{'external_client':'firefox135'}",
         "-o", "%(title)s.%(ext)s",  # Specify output template without ID
         "-P", str(DEFAULT_DOWNLOAD_FOLDER),
         url
     ]
     
-    # Only add cookies if enabled and for sites that require authentication
-    if USE_BROWSER_COOKIES and is_auth_site:
-        filename_command.insert(1, "--cookies-from-browser")
-        filename_command.insert(2, "firefox")
+    # Always use cookies
+    filename_command.insert(1, "--cookies-from-browser")
+    filename_command.insert(2, "firefox")
     
     try:
         filename_result = subprocess.run(
@@ -1173,6 +1140,7 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             "--user-agent", SYSTEM_USER_AGENT,
             "--no-mtime",
             "--no-playlist",
+            "--downloader-args", "default:{'external_client':'firefox135'}",
             "-o", yt_dlp_output_template,
             "-P", str(temp_processing_dir),
             "--convert-thumbnails", "png",
@@ -1184,10 +1152,9 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
             url
         ]
         
-        # Only add cookies if enabled and for sites that require authentication
-        if USE_BROWSER_COOKIES and is_auth_site:
-            yt_dlp_command.insert(1, "--cookies-from-browser")
-            yt_dlp_command.insert(2, "firefox")
+        # Always use cookies
+        yt_dlp_command.insert(1, "--cookies-from-browser")
+        yt_dlp_command.insert(2, "firefox")
         
         # Add format-specific parameters based on conditions
         if not audio_only:
@@ -1199,32 +1166,22 @@ def process_single_video(handler, url, audio_only, temp_processing_dir, item_num
                         "-f", "(bestvideo[hdr=1][height<=1080])/(bestvideo[bit_depth=10][height<=1080])/(bestvideo[height<=1080])+(bestaudio)/b[height<=1080]",
                         "--merge-output-format", "mp4" if use_mp4 else "mkv",
                         "--remux-video", "mp4" if use_mp4 else "mkv",
-                        "--audio-format", "aac"
+                        "--audio-format", "aac",
+                        "--embed-subs",
+                        "--sub-format", "srt/best",
+                        "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
                     ]
-                    
-                    # Only add these features for MKV format
-                    if not use_mp4:
-                        yt_dlp_command += [
-                            "--embed-subs",
-                            "--sub-format", "srt/best",
-                            "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
-                        ]
                 else:
                     # HDR prioritised format string when no 1080p limit set
                     yt_dlp_command += [
                         "-f", "(bestvideo[hdr=1])/(bestvideo[bit_depth=10])+(bestaudio)/bv*+ba/b",
                         "--merge-output-format", "mp4" if use_mp4 else "mkv",
                         "--remux-video", "mp4" if use_mp4 else "mkv",
-                        "--audio-format", "aac"
+                        "--audio-format", "aac",
+                        "--embed-subs",
+                        "--sub-format", "srt/best",
+                        "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
                     ]
-                    
-                    # Only add these features for MKV format
-                    if not use_mp4:
-                        yt_dlp_command += [
-                            "--embed-subs",
-                            "--sub-format", "srt/best",
-                            "--sponsorblock-mark", "all,-music_offtopic,-poi_highlight"
-                        ]
             else:
                 # TED video - download subs separately
                 yt_dlp_command += [
@@ -1522,7 +1479,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
         if isinstance(error_value, ConnectionAbortedError):
             print("\n❌ Connection lost")
             print("─────────────────")
-            print("😎 Ready\n")
+            print("😎 Ready")
         else:
             super().handle_error(request, client_address)
 
@@ -1557,7 +1514,6 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
             server_info = {
                 "server_path": server_path,
                 "port": settings["port"],
-                "use_browser_cookies": settings.get("use_browser_cookies", False),
                 "limit_to_1080p": settings.get("limit_to_1080p", True),
                 "use_mp4": settings.get("use_mp4", False)
             }
@@ -1585,7 +1541,7 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
 
             logging.info("🚀 Download started 🪐")
             print(f"🌍 URL: {url}")
-            print(f"🎧 Audio only?: {'✅ Yes' if audio_only else '❌ No'}\n📽️ Limit to max 1080p?: {'✅ Yes' if limit_to_1080p else '❌ No'}\n🍪 Using browser cookies: {'✅ Yes' if USE_BROWSER_COOKIES else '❌ No'}\n📼 Use MP4 instead of MKV?: {'✅ Yes' if use_mp4 else '❌ No'}")
+            print(f"🎧 Audio only?: {'✅ Yes' if audio_only else '❌ No'}\n📽️ Limit to max 1080p?: {'✅ Yes' if limit_to_1080p else '❌ No'}\n📼 Use MP4 instead of MKV?: {'✅ Yes' if use_mp4 else '❌ No'}")
             
 
             print(f"🔎 Getting filename/playlist info ...")
@@ -1604,16 +1560,13 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     # Build command with user agent
                     playlist_command = [
                         "yt-dlp",
+                        "--cookies-from-browser", "firefox",
                         "--user-agent", SYSTEM_USER_AGENT,
+                        "--downloader-args", "default:{'external_client':'firefox135'}",
                         "--flat-playlist",
                         "--print", "%(id)s",
                         url
                     ]
-                    
-                    # Only add cookies for YouTube if enabled
-                    if USE_BROWSER_COOKIES:
-                        playlist_command.insert(1, "--cookies-from-browser")
-                        playlist_command.insert(2, "firefox")
                     
                     playlist_result = subprocess.run(
                         playlist_command,
@@ -1626,17 +1579,14 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                     # Build command with user agent
                     playlist_name_cmd = [
                         "yt-dlp",
+                        "--cookies-from-browser", "firefox",
                         "--user-agent", SYSTEM_USER_AGENT,
+                        "--downloader-args", "default:{'external_client':'firefox135'}",
                         "--flat-playlist",
                         "--print", "%(playlist_title)s",
                         url
                     ]
                     
-                    # Only add cookies for YouTube if enabled
-                    if USE_BROWSER_COOKIES:
-                        playlist_name_cmd.insert(1, "--cookies-from-browser")
-                        playlist_name_cmd.insert(2, "firefox")
-                        
                     playlist_name_result = subprocess.run(
                         playlist_name_cmd,
                         text=True,
@@ -1658,17 +1608,14 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                         # Build command with user agent
                         filename_command = [
                             "yt-dlp",
+                            "--cookies-from-browser", "firefox",
                             "--user-agent", SYSTEM_USER_AGENT,
+                            "--downloader-args", "default:{'external_client':'firefox135'}",
                             "--print", "filename",
                             "-o", "%(title)s.%(ext)s",
                             video_url
                         ]
                         
-                        # Only add cookies for YouTube if enabled
-                        if USE_BROWSER_COOKIES:
-                            filename_command.insert(1, "--cookies-from-browser")
-                            filename_command.insert(2, "firefox")
-                            
                         filename_result = subprocess.run(
                             filename_command,
                             text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -1792,22 +1739,6 @@ class BatchRequestHandler(BaseHTTPRequestHandler):
                 self._set_headers(500)
                 self.wfile.write(json.dumps({"message": "❌ Server error while updating folder."}).encode())
         
-        elif self.path == "/set-cookie-usage":
-            try:
-                data = json.loads(post_data)
-                use_cookies = data.get("useBrowserCookies", False)
-                
-                # Update the cookie usage setting
-                set_use_browser_cookies(use_cookies)
-                
-                self._set_headers(200)
-                self.wfile.write(json.dumps({"message": f"✅ Browser cookie usage set to: {'enabled' if use_cookies else 'disabled'}"}).encode())
-                
-            except Exception as e:
-                logging.error(f"Error updating cookie settings: {e}")
-                self._set_headers(500)
-                self.wfile.write(json.dumps({"message": "❌ Server error while updating cookie settings."}).encode())
-        
         elif self.path == "/set-limit-to-1080p":
             try:
                 data = json.loads(post_data)
@@ -1881,6 +1812,6 @@ try:
 except KeyboardInterrupt:
     print("\n🚀 Downloads cancelled\n")
     print("✨ You need to restart the server to keep downloading")
-    print('✨ To do that, type "python simple.py" (without the quotes) and press Enter')
-    print("✨ (If you've done that before in this session, press the up arrow to save you typing)\n\n")
+    print('✨ To do that, type "py simple.py" (without the quotes) and press Enter')
+    print("✨ (If you've done that before, press the up arrow to save you typing)\n\n")
     sys.exit(0)
